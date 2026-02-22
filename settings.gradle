@@ -1,0 +1,13 @@
+rootProject.name = 'olo-worker'
+
+include 'olo-annotations'
+include 'olo-worker-configuration'
+include 'olo-worker-input'
+include 'olo-worker-execution-tree'
+include 'olo-worker-execution-context'
+include 'olo-worker-features'
+include 'olo-feature-debug'
+include 'olo-worker-plugin'
+include 'olo-plugin-ollama'
+include 'olo-worker-bootstrap'
+include 'olo-worker'

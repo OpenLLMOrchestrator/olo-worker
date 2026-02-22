@@ -1,0 +1,44 @@
+plugins {
+    id 'java'
+    id 'application'
+}
+
+group = 'com.olo'
+version = '1.0.0-SNAPSHOT'
+
+java {
+    sourceCompatibility = JavaVersion.VERSION_17
+    targetCompatibility = JavaVersion.VERSION_17
+}
+
+repositories {
+    mavenCentral()
+}
+
+dependencies {
+    implementation project(':olo-worker-bootstrap')
+    implementation project(':olo-worker-configuration')
+    implementation project(':olo-worker-execution-tree')
+    implementation project(':olo-worker-features')
+    implementation project(':olo-worker-input')
+    implementation project(':olo-worker-plugin')
+    implementation project(':olo-feature-debug')
+    implementation project(':olo-plugin-ollama')
+    implementation 'io.temporal:temporal-sdk:1.24.1'
+    runtimeOnly 'org.slf4j:slf4j-simple:2.0.9'
+    testImplementation 'io.temporal:temporal-testing:1.24.1'
+    testImplementation 'org.junit.jupiter:junit-jupiter:5.10.2'
+}
+
+application {
+    mainClass = 'com.olo.worker.OloWorkerApplication'
+}
+
+// So that Path.of("config") finds repo root's config/ (default.json, olo-chat-queue-oolama.json, etc.)
+tasks.named('run') {
+    workingDir = rootProject.projectDir
+}
+
+tasks.named('test') {
+    useJUnitPlatform()
+}

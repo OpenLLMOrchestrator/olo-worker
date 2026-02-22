@@ -1,0 +1,16 @@
+group = 'com.olo'
+version = '1.0.0-SNAPSHOT'
+
+subprojects {
+    group = rootProject.group
+    version = rootProject.version
+
+    repositories {
+        mavenCentral()
+    }
+
+    // Use all processor groups on Windows (removes "UseAllWindowsProcessorGroups flag is off" warning when not in container)
+    tasks.withType(JavaExec).configureEach {
+        jvmArgs '-XX:+UseAllWindowsProcessorGroups'
+    }
+}

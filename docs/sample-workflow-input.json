@@ -1,0 +1,54 @@
+{
+  "version": "2.0",
+  "inputs": [
+    {
+      "name": "input1",
+      "displayName": "input1",
+      "type": "STRING",
+      "storage": {
+        "mode": "LOCAL"
+      },
+      "value": "Hi!"
+    },
+    {
+      "name": "input2",
+      "displayName": "input2",
+      "type": "STRING",
+      "storage": {
+        "mode": "CACHE",
+        "cache": {
+          "provider": "REDIS",
+          "key": "olo:worker:8huqpd42mizzgjOhJEH9C:input:input2"
+        }
+      }
+    },
+    {
+      "name": "input3",
+      "displayName": "input3",
+      "type": "FILE",
+      "storage": {
+        "mode": "LOCAL",
+        "file": {
+          "relativeFolder": "rag/8huqpd42mizzgjOhJEH9C/",
+          "fileName": "readme.md"
+        }
+      }
+    }
+  ],
+  "context": {
+    "tenantId": "",
+    "groupId": "",
+    "roles": ["PUBLIC", "ADMIN"],
+    "permissions": ["STORAGE", "CACHE", "S3"],
+    "sessionId": "953a8f7f-0a3c-4078-aa2c-6970291f8fbd"
+  },
+  "routing": {
+    "pipeline": "chat-queue-ollama",
+    "transactionType": "QUESTION_ANSWER",
+    "transactionId": "8huqpd42mizzgjOhJEH9C"
+  },
+  "metadata": {
+    "ragTag": null,
+    "timestamp": 1771740578582
+  }
+}

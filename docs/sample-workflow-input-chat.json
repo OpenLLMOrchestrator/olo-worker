@@ -1,0 +1,25 @@
+{
+  "version": "2.0",
+  "inputs": [
+    {
+      "name": "userQuery",
+      "displayName": "User query",
+      "type": "STRING",
+      "storage": { "mode": "LOCAL" },
+      "value": "What is the capital of France?"
+    }
+  ],
+  "context": {
+    "tenantId": "",
+    "groupId": "",
+    "roles": ["PUBLIC"],
+    "permissions": [],
+    "sessionId": "your-session-id-here"
+  },
+  "routing": {
+    "pipeline": "olo-chat-queue-oolama",
+    "transactionType": "QUESTION_ANSWER",
+    "transactionId": "wf-001"
+  },
+  "metadata": {}
+}

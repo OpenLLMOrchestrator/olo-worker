@@ -1,0 +1,57 @@
+# ========================
+# Build output
+# ========================
+/build/
+plugin-contract/build/
+plugins/build/
+.gradle/
+
+# ========================
+# Gradle Wrapper
+# ========================
+!gradle/wrapper/gradle-wrapper.jar
+
+# ========================
+# Logs
+# ========================
+*.log
+
+# ========================
+# IntelliJ IDEA
+# ========================
+.idea/
+*.iml
+out/
+
+# ========================
+# Eclipse
+# ========================
+.project
+.classpath
+.settings/
+
+# ========================
+# VS Code
+# ========================
+.vscode/
+
+# ========================
+# OS Files
+# ========================
+.DS_Store
+Thumbs.db
+
+# ========================
+# Plugin JARs (place JARs in plugins/; they are bundled at build time)
+# ========================
+/plugins/*.jar
+
+# ========================
+# Temporary files
+# ========================
+*.tmp
+*.swp
+/.idea/*
+
+build/
+*.class

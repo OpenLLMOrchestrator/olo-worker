@@ -1,0 +1,92 @@
+{
+  "version": "1.0.0",
+  "executionDefaults": {
+    "engine": "TEMPORAL",
+    "temporal": {
+      "target": "localhost:7233",
+      "namespace": "default",
+      "taskQueuePrefix": "olo-"
+    },
+    "activity": {
+      "payload": {
+        "maxAccumulatedOutputKeys": 0,
+        "maxResultOutputKeys": 0
+      },
+      "defaultTimeouts": {
+        "scheduleToStartSeconds": 6000,
+        "startToCloseSeconds": 3000,
+        "scheduleToCloseSeconds": 30000
+      },
+      "retryPolicy": {
+        "maximumAttempts": 3,
+        "initialIntervalSeconds": 1,
+        "backoffCoefficient": 2,
+        "maximumIntervalSeconds": 60,
+        "nonRetryableErrors": []
+      }
+    }
+  },
+  "pluginRestrictions": [],
+  "featureRestrictions": [],
+  "pipelines": {
+    "olo-chat-queue-oolama": {
+      "name": "olo-chat-queue-oolama",
+      "workflowId": "olo-chat-queue-oolama",
+      "inputContract": {
+        "strict": true,
+        "parameters": [
+          { "name": "userQuery", "type": "STRING", "required": true }
+        ]
+      },
+      "variableRegistry": [
+        { "name": "userQuery", "type": "STRING", "scope": "IN" },
+        { "name": "rawResponse", "type": "STRING", "scope": "INTERNAL" },
+        { "name": "finalAnswer", "type": "STRING", "scope": "OUT" }
+      ],
+      "scope": {
+        "plugins": [
+          {
+            "id": "GPT4_EXECUTOR",
+            "displayName": "GPT-4 Executor",
+            "contractType": "MODEL_EXECUTOR",
+            "inputParameters": [
+              { "name": "prompt", "type": "STRING", "required": true }
+            ],
+            "outputParameters": [
+              { "name": "responseText", "type": "STRING" }
+            ]
+          }
+        ],
+        "features": [{"id": "debug", "displayName": "Debug"}]
+      },
+      "executionTree": {
+        "id": "root",
+        "displayName": "Pipeline",
+        "type": "SEQUENCE",
+        "children": [
+          {
+            "id": "modelNode",
+            "displayName": "Model",
+            "type": "PLUGIN",
+            "nodeType": "MODEL_EXECUTOR",
+            "pluginRef": "GPT4_EXECUTOR",
+            "inputMappings": [
+              { "pluginParameter": "prompt", "variable": "userQuery" }
+            ],
+            "outputMappings": [
+              { "pluginParameter": "responseText", "variable": "finalAnswer" }
+            ]
+          }
+        ]
+      },
+      "outputContract": {
+        "parameters": [
+          { "name": "answer", "type": "STRING" }
+        ]
+      },
+      "resultMapping": [
+        { "variable": "finalAnswer", "outputParameter": "answer" }
+      ]
+    }
+  }
+}
