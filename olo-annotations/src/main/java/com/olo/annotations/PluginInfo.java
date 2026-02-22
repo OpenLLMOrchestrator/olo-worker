@@ -15,6 +15,7 @@ public final class PluginInfo {
     private final String id;
     private final String displayName;
     private final String contractType;
+    private final String contractVersion;
     private final String description;
     private final String category;
     private final String icon;
@@ -26,6 +27,7 @@ public final class PluginInfo {
             String id,
             String displayName,
             String contractType,
+            String contractVersion,
             String description,
             String category,
             String icon,
@@ -35,6 +37,7 @@ public final class PluginInfo {
         this.id = id;
         this.displayName = displayName;
         this.contractType = contractType;
+        this.contractVersion = contractVersion;
         this.description = description;
         this.category = category;
         this.icon = icon;
@@ -46,6 +49,7 @@ public final class PluginInfo {
     public String getId() { return id; }
     public String getDisplayName() { return displayName; }
     public String getContractType() { return contractType; }
+    public String getContractVersion() { return contractVersion; }
     public String getDescription() { return description; }
     public String getCategory() { return category; }
     public String getIcon() { return icon; }

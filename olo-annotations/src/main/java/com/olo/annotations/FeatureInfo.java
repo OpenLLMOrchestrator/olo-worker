@@ -12,18 +12,21 @@ import java.util.List;
 public final class FeatureInfo {
 
     private final String name;
+    private final String contractVersion;
     private final String phase;
     private final List<String> applicableNodeTypes;
     private final String className;
 
-    public FeatureInfo(String name, String phase, List<String> applicableNodeTypes, String className) {
+    public FeatureInfo(String name, String contractVersion, String phase, List<String> applicableNodeTypes, String className) {
         this.name = name;
+        this.contractVersion = contractVersion;
         this.phase = phase;
         this.applicableNodeTypes = applicableNodeTypes;
         this.className = className;
     }
 
     public String getName() { return name; }
+    public String getContractVersion() { return contractVersion; }
     public String getPhase() { return phase; }
     public List<String> getApplicableNodeTypes() { return applicableNodeTypes; }
     public String getClassName() { return className; }

@@ -24,7 +24,7 @@ public interface OloKernelActivities {
 
     /**
      * Convenience: calls a model-executor plugin with a single "prompt" input and returns the "responseText" output.
-     * Used for chat flows (e.g. Ollama plugin).
+     * Used by tree traversal for PLUGIN nodes (e.g. Ollama); not for direct workflow use.
      *
      * @param pluginId plugin id (e.g. GPT4_EXECUTOR)
      * @param prompt   user prompt / message
@@ -34,15 +34,16 @@ public interface OloKernelActivities {
     String getChatResponse(String pluginId, String prompt);
 
     /**
-     * Same as {@link #getChatResponse(String, String)} but when {@code queueName} ends with "-debug",
-     * runs pre/post features (e.g. debug logging) for the pipeline's plugin node before and after the call.
-     * Uses pipeline config from global context and {@code queueName} to resolve features.
+     * Runs the execution tree for the given queue using a local (deep) copy of the pipeline config.
+     * Resolves effective queue (from param or activity task queue for -debug), creates LocalContext,
+     * seeds variable map from workflow input (IN scope), traverses the tree (SEQUENCE → children;
+     * PLUGIN → pre features, execute plugin, post features), then applies resultMapping to produce
+     * the workflow result. Returns the result as a string (e.g. the single output "answer" for chat).
      *
-     * @param queueName pipeline/task queue name (e.g. olo-chat-queue-oolama-debug for debug logs)
-     * @param pluginId  plugin id (e.g. GPT4_EXECUTOR)
-     * @param prompt    user prompt / message
-     * @return model response text, or empty string if missing
+     * @param queueName         pipeline/task queue name (e.g. olo-chat-queue-oolama or olo-chat-queue-oolama-debug)
+     * @param workflowInputJson workflow input JSON (for variable resolution and session)
+     * @return workflow result string (e.g. final answer for chat flow)
      */
     @ActivityMethod
-    String getChatResponseWithFeatures(String queueName, String pluginId, String prompt);
+    String runExecutionTree(String queueName, String workflowInputJson);
 }

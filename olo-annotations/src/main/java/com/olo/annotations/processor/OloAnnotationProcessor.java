@@ -62,7 +62,8 @@ public class OloAnnotationProcessor extends AbstractProcessor {
             FeaturePhase phase = ann.phase();
             String[] arr = ann.applicableNodeTypes();
             List<String> nodeTypes = (arr == null || arr.length == 0) ? null : java.util.Arrays.asList(arr);
-            features.add(new FeatureInfo(ann.name(), phase.name(), nodeTypes, className));
+            String contractVersion = ann.contractVersion() != null && !ann.contractVersion().isEmpty() ? ann.contractVersion() : "1.0";
+            features.add(new FeatureInfo(ann.name(), contractVersion, phase.name(), nodeTypes, className));
         }
 
         for (Element e : roundEnv.getElementsAnnotatedWith(OloPlugin.class)) {
@@ -75,10 +76,12 @@ public class OloAnnotationProcessor extends AbstractProcessor {
             if (displayName == null) displayName = ann.id();
             List<PluginParamInfo> inParams = toParamList(ann.inputParameters());
             List<PluginParamInfo> outParams = toParamList(ann.outputParameters());
+            String contractVersion = ann.contractVersion() != null && !ann.contractVersion().isEmpty() ? ann.contractVersion() : "1.0";
             plugins.add(new PluginInfo(
                     ann.id(),
                     displayName,
                     ann.contractType(),
+                    contractVersion,
                     emptyToNull(ann.description()),
                     emptyToNull(ann.category()),
                     emptyToNull(ann.icon()),

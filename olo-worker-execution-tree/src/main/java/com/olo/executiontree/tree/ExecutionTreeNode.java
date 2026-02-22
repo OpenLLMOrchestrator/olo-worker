@@ -4,19 +4,22 @@ import com.fasterxml.jackson.annotation.JsonCreator;
 import com.fasterxml.jackson.annotation.JsonProperty;
 
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import java.util.UUID;
 
 /**
  * Node in the execution tree. Can be a container (e.g. SEQUENCE with children)
  * or a plugin node (PLUGIN with pluginRef, inputMappings, outputMappings).
- * Each node can have explicit preExecution/postExecution lists and featureRequired/featureNotRequired overrides.
+ * Each node can have explicit pre/post feature lists and featureRequired/featureNotRequired overrides.
+ * Post phases: postExecution (legacy, merged into the three below by resolver), postSuccessExecution,
+ * postErrorExecution, finallyExecution. The executor runs postSuccess on success, postError on exception, then finally always.
  */
 public final class ExecutionTreeNode {
 
     private final String id;
     private final String displayName;
-    private final String type;
+    private final NodeType type;
     private final List<ExecutionTreeNode> children;
     private final String nodeType;
     private final String pluginRef;
@@ -25,14 +28,18 @@ public final class ExecutionTreeNode {
     private final List<String> features;
     private final List<String> preExecution;
     private final List<String> postExecution;
+    private final List<String> postSuccessExecution;
+    private final List<String> postErrorExecution;
+    private final List<String> finallyExecution;
     private final List<String> featureRequired;
     private final List<String> featureNotRequired;
+    private final Map<String, Object> params;
 
     @JsonCreator
     public ExecutionTreeNode(
             @JsonProperty("id") String id,
             @JsonProperty("displayName") String displayName,
-            @JsonProperty("type") String type,
+            @JsonProperty("type") NodeType type,
             @JsonProperty("children") List<ExecutionTreeNode> children,
             @JsonProperty("nodeType") String nodeType,
             @JsonProperty("pluginRef") String pluginRef,
@@ -41,11 +48,15 @@ public final class ExecutionTreeNode {
             @JsonProperty("features") List<String> features,
             @JsonProperty("preExecution") List<String> preExecution,
             @JsonProperty("postExecution") List<String> postExecution,
+            @JsonProperty("postSuccessExecution") List<String> postSuccessExecution,
+            @JsonProperty("postErrorExecution") List<String> postErrorExecution,
+            @JsonProperty("finallyExecution") List<String> finallyExecution,
             @JsonProperty("featureRequired") List<String> featureRequired,
-            @JsonProperty("featureNotRequired") List<String> featureNotRequired) {
+            @JsonProperty("featureNotRequired") List<String> featureNotRequired,
+            @JsonProperty("params") Map<String, Object> params) {
         this.id = id;
         this.displayName = displayName;
-        this.type = type;
+        this.type = type != null ? type : NodeType.UNKNOWN;
         this.children = children != null ? List.copyOf(children) : List.of();
         this.nodeType = nodeType;
         this.pluginRef = pluginRef;
@@ -54,8 +65,12 @@ public final class ExecutionTreeNode {
         this.features = features != null ? List.copyOf(features) : List.of();
         this.preExecution = preExecution != null ? List.copyOf(preExecution) : List.of();
         this.postExecution = postExecution != null ? List.copyOf(postExecution) : List.of();
+        this.postSuccessExecution = postSuccessExecution != null ? List.copyOf(postSuccessExecution) : List.of();
+        this.postErrorExecution = postErrorExecution != null ? List.copyOf(postErrorExecution) : List.of();
+        this.finallyExecution = finallyExecution != null ? List.copyOf(finallyExecution) : List.of();
         this.featureRequired = featureRequired != null ? List.copyOf(featureRequired) : List.of();
         this.featureNotRequired = featureNotRequired != null ? List.copyOf(featureNotRequired) : List.of();
+        this.params = params != null ? Map.copyOf(params) : Map.of();
     }
 
     public String getId() {
@@ -89,8 +104,12 @@ public final class ExecutionTreeNode {
                 node.features,
                 node.preExecution,
                 node.postExecution,
+                node.postSuccessExecution,
+                node.postErrorExecution,
+                node.finallyExecution,
                 node.featureRequired,
-                node.featureNotRequired
+                node.featureNotRequired,
+                node.params
         );
     }
 
@@ -116,8 +135,12 @@ public final class ExecutionTreeNode {
                 node.features,
                 node.preExecution,
                 node.postExecution,
+                node.postSuccessExecution,
+                node.postErrorExecution,
+                node.finallyExecution,
                 node.featureRequired,
-                node.featureNotRequired
+                node.featureNotRequired,
+                node.params
         );
     }
 
@@ -131,7 +154,8 @@ public final class ExecutionTreeNode {
         }
     }
 
-    public String getType() {
+    /** Structural node type (SEQUENCE, PLUGIN, IF, etc.). Never null. */
+    public NodeType getType() {
         return type;
     }
 
@@ -165,9 +189,24 @@ public final class ExecutionTreeNode {
         return preExecution;
     }
 
-    /** Feature names to run after this node (explicit list from config). */
+    /** Feature names to run after this node (legacy; resolver merges into postSuccess/postError/finally by phase). */
     public List<String> getPostExecution() {
         return postExecution;
+    }
+
+    /** Feature names to run after this node completes successfully. */
+    public List<String> getPostSuccessExecution() {
+        return postSuccessExecution;
+    }
+
+    /** Feature names to run after this node throws an exception. */
+    public List<String> getPostErrorExecution() {
+        return postErrorExecution;
+    }
+
+    /** Feature names to run after this node (success or error). */
+    public List<String> getFinallyExecution() {
+        return finallyExecution;
     }
 
     /** Features that must be attached to this node (resolver adds by phase). */
@@ -180,12 +219,17 @@ public final class ExecutionTreeNode {
         return featureNotRequired;
     }
 
+    /** Type-specific parameters (e.g. conditionVariable for IF, mergeStrategy for JOIN, collectionVariable for ITERATOR). Unmodifiable. */
+    public Map<String, Object> getParams() {
+        return params;
+    }
+
     @Override
     public boolean equals(Object o) {
         if (this == o) return true;
         if (o == null || getClass() != o.getClass()) return false;
         ExecutionTreeNode that = (ExecutionTreeNode) o;
-        return Objects.equals(id, that.id) && Objects.equals(type, that.type)
+        return Objects.equals(id, that.id) && type == that.type
                 && Objects.equals(children, that.children) && Objects.equals(nodeType, that.nodeType)
                 && Objects.equals(pluginRef, that.pluginRef)
                 && Objects.equals(inputMappings, that.inputMappings)
@@ -193,13 +237,18 @@ public final class ExecutionTreeNode {
                 && Objects.equals(features, that.features)
                 && Objects.equals(preExecution, that.preExecution)
                 && Objects.equals(postExecution, that.postExecution)
+                && Objects.equals(postSuccessExecution, that.postSuccessExecution)
+                && Objects.equals(postErrorExecution, that.postErrorExecution)
+                && Objects.equals(finallyExecution, that.finallyExecution)
                 && Objects.equals(featureRequired, that.featureRequired)
-                && Objects.equals(featureNotRequired, that.featureNotRequired);
+                && Objects.equals(featureNotRequired, that.featureNotRequired)
+                && Objects.equals(params, that.params);
     }
 
     @Override
     public int hashCode() {
         return Objects.hash(id, displayName, type, children, nodeType, pluginRef, inputMappings, outputMappings,
-                features, preExecution, postExecution, featureRequired, featureNotRequired);
+                features, preExecution, postExecution, postSuccessExecution, postErrorExecution, finallyExecution,
+                featureRequired, featureNotRequired, params);
     }
 }

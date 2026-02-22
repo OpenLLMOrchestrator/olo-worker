@@ -31,7 +31,7 @@ public final class PluginRegistry {
      * @throws IllegalArgumentException if id is blank or already registered
      */
     public void registerModelExecutor(String id, ModelExecutorPlugin plugin) {
-        register(id, ContractType.MODEL_EXECUTOR, plugin);
+        register(id, ContractType.MODEL_EXECUTOR, "1.0", plugin);
     }
 
     /**
@@ -43,12 +43,24 @@ public final class PluginRegistry {
      * @throws IllegalArgumentException if id is blank or already registered
      */
     public void register(String id, String contractType, Object plugin) {
+        register(id, contractType, null, plugin);
+    }
+
+    /**
+     * Registers a plugin with an explicit contract version for config compatibility checks.
+     *
+     * @param id             plugin id
+     * @param contractType   contract type
+     * @param contractVersion contract version (e.g. 1.0); null = unknown (version check skipped)
+     * @param plugin         implementation
+     */
+    public void register(String id, String contractType, String contractVersion, Object plugin) {
         Objects.requireNonNull(plugin, "plugin");
         String tid = Objects.requireNonNull(id, "id").trim();
         if (tid.isEmpty()) {
             throw new IllegalArgumentException("Plugin id must be non-blank");
         }
-        PluginEntry entry = new PluginEntry(tid, contractType, plugin);
+        PluginEntry entry = new PluginEntry(tid, contractType, contractVersion, plugin);
         if (byId.putIfAbsent(tid, entry) != null) {
             throw new IllegalArgumentException("Plugin already registered: " + id);
         }
@@ -73,6 +85,12 @@ public final class PluginRegistry {
         return p instanceof ModelExecutorPlugin ? (ModelExecutorPlugin) p : null;
     }
 
+    /** Returns the contract version for the plugin, or null if unknown. */
+    public String getContractVersion(String id) {
+        PluginEntry e = get(id);
+        return e != null ? e.getContractVersion() : null;
+    }
+
     public Map<String, PluginEntry> getAll() {
         return Collections.unmodifiableMap(byId);
     }
@@ -88,11 +106,13 @@ public final class PluginRegistry {
     public static final class PluginEntry {
         private final String id;
         private final String contractType;
+        private final String contractVersion;
         private final Object plugin;
 
-        PluginEntry(String id, String contractType, Object plugin) {
+        PluginEntry(String id, String contractType, String contractVersion, Object plugin) {
             this.id = id;
             this.contractType = contractType;
+            this.contractVersion = contractVersion;
             this.plugin = plugin;
         }
 
@@ -102,6 +122,11 @@ public final class PluginRegistry {
 
         public String getContractType() {
             return contractType;
+        }
+
+        /** Contract version (e.g. 1.0) for config compatibility; null = unknown. */
+        public String getContractVersion() {
+            return contractVersion;
         }
 
         public Object getPlugin() {

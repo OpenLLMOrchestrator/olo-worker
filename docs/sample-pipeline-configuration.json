@@ -57,7 +57,9 @@
             ]
           }
         ],
-        "features": []
+        "features": [
+          { "id": "debug", "displayName": "Debug", "contractVersion": "1.0" }
+        ]
       },
       "executionTree": {
         "id": "root",

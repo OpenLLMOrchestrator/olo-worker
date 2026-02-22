@@ -37,6 +37,7 @@ The pipeline configuration defines one or more **named pipelines**, each with an
 | `executionTree` | object | Root node of the execution tree (SEQUENCE, PLUGIN, etc.). |
 | `outputContract` | object | **Out contract**: final result shape to the user (parameters: name, type). |
 | `resultMapping` | array | Maps execution variables (e.g. OUT) to output contract parameters (final result). |
+| `executionType` | string | **SYNC** (default) or **ASYNC**. When ASYNC, every node except JOIN runs in a worker thread; JOIN runs synchronously to merge. |
 
 ### inputContract
 
@@ -45,7 +46,7 @@ The pipeline configuration defines one or more **named pipelines**, each with an
 
 ### variableRegistry
 
-Each entry: `{ "name", "type", "scope" }`. **scope** is one of: `IN`, `INTERNAL`, `OUT`.
+Each entry: `{ "name", "type", "scope" }`. **scope** is one of: `IN`, `INTERNAL`, `OUT`. All variables used in the execution tree (inputMappings, outputMappings, resultMapping) must be declared here. See [**3.x Variable Execution Model**](variable-execution-model.md) for rules: IN variables must match inputContract, INTERNAL initialized null, OUT must be assigned before completion, type validation on mappings, unknown variables rejected when strict.
 
 ### scope
 
@@ -69,18 +70,22 @@ Example: `{ "variable": "finalAnswer", "outputParameter": "answer" }` means the 
 
 ### executionTree
 
-Tree of nodes. Each node has:
+Tree of nodes. **Node types:** SEQUENCE, IF, SWITCH, ITERATOR, FORK, JOIN, PLUGIN, CASE. See [**Node type catalog**](node-type-catalog.md) for purpose and **params** (e.g. conditionVariable, switchVariable, mergeStrategy, collectionVariable). Each node has:
 
-- **id**, **type** (e.g. `SEQUENCE`, `PLUGIN`).
-- **children** (for container nodes like SEQUENCE).
+- **id**, **type** (e.g. `SEQUENCE`, `IF`, `SWITCH`, `ITERATOR`, `FORK`, `JOIN`, `PLUGIN`, `CASE`).
+- **children** (for container nodes).
+- **params** (optional): type-specific config (e.g. `conditionVariable` for IF, `switchVariable` for SWITCH, `mergeStrategy` for JOIN, `collectionVariable`/`itemVariable` for ITERATOR).
 - For **PLUGIN** nodes: **nodeType**, **pluginRef**, **inputMappings**, **outputMappings** (each mapping: `pluginParameter` → `variable`).
-- **features** (optional): feature names (shorthand; resolver merges into pre/post by phase).
+- **features** (optional): feature names (shorthand; resolver merges into pre/postSuccess/postError/finally by phase).
 - **preExecution** (optional): feature names to run **before** this node.
-- **postExecution** (optional): feature names to run **after** this node.
+- **postExecution** (optional): legacy; feature names to run after this node (resolver adds to postSuccess, postError, and finally).
+- **postSuccessExecution** (optional): feature names to run **after** this node completes successfully.
+- **postErrorExecution** (optional): feature names to run **after** this node throws an exception.
+- **finallyExecution** (optional): feature names to run **after** this node (success or error).
 - **featureRequired** (optional): features that must be attached (resolver adds by phase).
 - **featureNotRequired** (optional): features to **exclude** for this node (e.g. opt out of debug with `["debug"]`).
 
-When the queue name ends with **-debug** and the **debug** feature is in the pipeline/global feature list, the Debugger feature is attached to all nodes (applicableNodeTypes `"*"`) unless the node lists `"debug"` in **featureNotRequired**. Use **FeatureAttachmentResolver.resolve(node, queueName, scopeFeatureNames, registry)** to get the effective **ResolvedPrePost** (pre/post lists). See **olo-worker-features** for `PreNodeCall`, `PostNodeCall`, and **olo-feature-debug** for `DebuggerFeature`.
+When the queue name ends with **-debug** and the **debug** feature is in the pipeline/global feature list, the Debugger feature is attached to all nodes (applicableNodeTypes `"*"`) unless the node lists `"debug"` in **featureNotRequired**. Use **FeatureAttachmentResolver.resolve(node, queueName, scopeFeatureNames, registry)** to get the effective **ResolvedPrePost** (pre, postSuccess, postError, finally). The executor runs postSuccess on normal completion, postError on exception, then finally always. See **olo-worker-features** and [architecture-and-features.md](architecture-and-features.md).
 
 ## How to load and use (Java)
 

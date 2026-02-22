@@ -14,7 +14,7 @@ import org.slf4j.LoggerFactory;
  * and this feature is in the pipeline/global feature list. Applicable to all node types ("*").
  * Register with {@link FeatureRegistry#getInstance()}.register(new DebuggerFeature()).
  */
-@OloFeature(name = "debug", phase = FeaturePhase.PRE_POST, applicableNodeTypes = { "*" })
+@OloFeature(name = "debug", phase = FeaturePhase.PRE_FINALLY, applicableNodeTypes = { "*" })
 public final class DebuggerFeature implements PreNodeCall, PostNodeCall {
 
     private static final Logger log = LoggerFactory.getLogger(DebuggerFeature.class);

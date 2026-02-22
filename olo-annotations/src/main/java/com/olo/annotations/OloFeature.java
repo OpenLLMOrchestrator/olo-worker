@@ -19,8 +19,11 @@ public @interface OloFeature {
     /** Unique feature identifier (used in node's features list and in the registry). */
     String name();
 
-    /** When to invoke: before node (PRE), after node (POST), or both (PRE_POST). */
-    FeaturePhase phase() default FeaturePhase.PRE_POST;
+    /** Feature contract version (e.g. 1.0) for compatibility checks; config scope can require this version. */
+    String contractVersion() default "1.0";
+
+    /** When to invoke: PRE, POST_SUCCESS, POST_ERROR, FINALLY, or PRE_FINALLY (before and after). */
+    FeaturePhase phase() default FeaturePhase.PRE_FINALLY;
 
     /** Node type patterns this feature applies to. Empty = all. E.g. "MODAL.*", "PLANNER.*", "GROUP", "IF", "*". */
     String[] applicableNodeTypes() default { };

@@ -23,11 +23,12 @@ public final class FeatureDefListDeserializer extends JsonDeserializer<List<Feat
         List<FeatureDef> result = new ArrayList<>();
         for (JsonNode element : node) {
             if (element.isTextual()) {
-                result.add(new FeatureDef(element.asText(), null));
+                result.add(new FeatureDef(element.asText(), null, null));
             } else if (element.isObject()) {
                 String id = element.has("id") ? element.get("id").asText(null) : null;
                 String displayName = element.has("displayName") ? element.get("displayName").asText(null) : null;
-                result.add(new FeatureDef(id, displayName));
+                String contractVersion = element.has("contractVersion") ? element.get("contractVersion").asText(null) : null;
+                result.add(new FeatureDef(id, displayName, contractVersion));
             }
         }
         return List.copyOf(result);

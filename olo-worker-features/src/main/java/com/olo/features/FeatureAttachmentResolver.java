@@ -11,14 +11,14 @@ import java.util.Set;
 /**
  * Resolves the effective pre/post feature lists for a tree node by merging:
  * <ul>
- *   <li>Node's explicit {@code preExecution} / {@code postExecution}</li>
+ *   <li>Node's explicit {@code preExecution}, {@code postSuccessExecution}, {@code postErrorExecution}, {@code finallyExecution}</li>
+ *   <li>Legacy {@code postExecution} (merged into all three post lists)</li>
  *   <li>Node's {@code features} (merged by each feature's phase)</li>
- *   <li>Pipeline/global enabled features (when queue ends with {@code -debug}, {@code debug} is added if in feature list)</li>
- *   <li>Node's {@code featureRequired} (always added)</li>
- *   <li>Node's {@code featureNotRequired} (excluded even when globally enabled)</li>
+ *   <li>Pipeline/global enabled features (when queue ends with {@code -debug}, {@code debug} is added)</li>
+ *   <li>Node's {@code featureRequired}</li>
+ *   <li>Node's {@code featureNotRequired} (excluded)</li>
  * </ul>
- * The builder ensures that for a debug queue, the Debug feature is attached to all nodes (matching the feature's
- * applicableNodeTypes, e.g. "*") unless the node opts out via {@code featureNotRequired}.
+ * Returns separate lists for postSuccess, postError, and finally so the executor can run the right hooks on success vs exception.
  */
 public final class FeatureAttachmentResolver {
 
@@ -32,7 +32,7 @@ public final class FeatureAttachmentResolver {
      * @param queueName                   task queue name (e.g. olo-chat-queue-oolama-debug)
      * @param pipelineScopeFeatureNames  feature names from pipeline scope (and/or root allowed list)
      * @param registry                    feature registry to check applicability and phase
-     * @return resolved pre and post feature name lists (no duplicates, order preserved)
+     * @return resolved pre, postSuccess, postError, finally lists (no duplicates, order preserved)
      */
     public static ResolvedPrePost resolve(
             ExecutionTreeNode node,
@@ -55,37 +55,47 @@ public final class FeatureAttachmentResolver {
 
         List<String> notRequired = node.getFeatureNotRequired();
         String nodeType = node.getNodeType();
-        String type = node.getType();
+        String type = node.getType().getTypeName();
 
         List<String> pre = new ArrayList<>(node.getPreExecution());
-        List<String> post = new ArrayList<>(node.getPostExecution());
-
-        for (String f : node.getFeatures()) {
-            if (f == null || notRequired.contains(f)) continue;
-            FeatureRegistry.FeatureEntry e = registry.get(f);
-            if (e == null) continue;
-            if (!e.appliesTo(nodeType, type)) continue;
-            if (e.isPre() && !pre.contains(f)) pre.add(f);
-            if (e.isPost() && !post.contains(f)) post.add(f);
-        }
-
-        for (String f : enabledForAttachment) {
-            if (notRequired.contains(f)) continue;
-            FeatureRegistry.FeatureEntry e = registry.get(f);
-            if (e == null) continue;
-            if (!e.appliesTo(nodeType, type)) continue;
-            if (e.isPre() && !pre.contains(f)) pre.add(f);
-            if (e.isPost() && !post.contains(f)) post.add(f);
-        }
-
-        for (String f : node.getFeatureRequired()) {
+        List<String> postSuccess = new ArrayList<>(node.getPostSuccessExecution());
+        List<String> postError = new ArrayList<>(node.getPostErrorExecution());
+        List<String> finallyList = new ArrayList<>(node.getFinallyExecution());
+        // Legacy: postExecution goes into all three post lists
+        for (String f : node.getPostExecution()) {
             if (f == null) continue;
-            FeatureRegistry.FeatureEntry e = registry.get(f);
-            if (e == null) continue;
-            if (e.isPre() && !pre.contains(f)) pre.add(f);
-            if (e.isPost() && !post.contains(f)) post.add(f);
+            if (!postSuccess.contains(f)) postSuccess.add(f);
+            if (!postError.contains(f)) postError.add(f);
+            if (!finallyList.contains(f)) finallyList.add(f);
         }
 
-        return new ResolvedPrePost(pre, post);
+        addFeaturesByPhase(node.getFeatures(), notRequired, nodeType, type, registry, pre, postSuccess, postError, finallyList);
+        addFeaturesByPhase(enabledForAttachment, notRequired, nodeType, type, registry, pre, postSuccess, postError, finallyList);
+        addFeaturesByPhase(node.getFeatureRequired(), null, nodeType, type, registry, pre, postSuccess, postError, finallyList);
+
+        return new ResolvedPrePost(pre, postSuccess, postError, finallyList);
+    }
+
+    private static void addFeaturesByPhase(
+            Iterable<String> featureNames,
+            List<String> exclude,
+            String nodeType,
+            String type,
+            FeatureRegistry registry,
+            List<String> pre,
+            List<String> postSuccess,
+            List<String> postError,
+            List<String> finallyList) {
+        if (featureNames == null) return;
+        for (String f : featureNames) {
+            if (f == null || (exclude != null && exclude.contains(f))) continue;
+            FeatureRegistry.FeatureEntry e = registry.get(f);
+            if (e == null) continue;
+            if (!e.appliesTo(nodeType, type)) continue;
+            if (e.isPre() && !pre.contains(f)) pre.add(f);
+            if (e.isPostSuccess() && !postSuccess.contains(f)) postSuccess.add(f);
+            if (e.isPostError() && !postError.contains(f)) postError.add(f);
+            if (e.isFinally() && !finallyList.contains(f)) finallyList.add(f);
+        }
     }
 }

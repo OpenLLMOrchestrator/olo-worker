@@ -4,26 +4,17 @@ import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.olo.config.OloSessionCache;
 import com.olo.executiontree.config.PipelineConfiguration;
-import com.olo.executiontree.config.PipelineDefinition;
-import com.olo.executiontree.load.GlobalConfigurationContext;
-import com.olo.executiontree.scope.FeatureDef;
-import com.olo.executiontree.scope.Scope;
-import com.olo.executiontree.tree.ExecutionTreeNode;
-import com.olo.features.FeatureAttachmentResolver;
-import com.olo.features.FeatureRegistry;
-import com.olo.features.NodeExecutionContext;
-import com.olo.features.PostNodeCall;
-import com.olo.features.PreNodeCall;
-import com.olo.features.ResolvedPrePost;
+import com.olo.executioncontext.LocalContext;
 import com.olo.input.model.WorkflowInput;
 import com.olo.plugin.ModelExecutorPlugin;
 import com.olo.plugin.PluginRegistry;
+import com.olo.worker.engine.ExecutionEngine;
+import com.olo.worker.engine.PluginInvoker;
 import io.temporal.activity.Activity;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.util.ArrayList;
-import java.util.List;
+import java.util.LinkedHashMap;
 import java.util.Map;
 
 /**
@@ -93,7 +84,14 @@ public class OloKernelActivitiesImpl implements OloKernelActivities {
     }
 
     @Override
-    public String getChatResponseWithFeatures(String queueName, String pluginId, String prompt) {
+    public String runExecutionTree(String queueName, String workflowInputJson) {
+        WorkflowInput workflowInput;
+        try {
+            workflowInput = WorkflowInput.fromJson(workflowInputJson);
+        } catch (Exception e) {
+            log.warn("Invalid workflow input JSON for runExecutionTree", e);
+            return "";
+        }
         String effectiveQueue = queueName;
         if (effectiveQueue == null || !effectiveQueue.endsWith("-debug")) {
             try {
@@ -102,96 +100,70 @@ public class OloKernelActivitiesImpl implements OloKernelActivities {
                     effectiveQueue = taskQueue;
                 }
             } catch (Exception e) {
-                // Not in activity context (e.g. unit test) or context unavailable
+                // Not in activity context
             }
         }
-        if (effectiveQueue == null || !effectiveQueue.endsWith("-debug")) {
-            return getChatResponse(pluginId, prompt);
-        }
-        com.olo.executiontree.load.GlobalContext globalCtx = GlobalConfigurationContext.get(effectiveQueue);
-        if (globalCtx == null) {
-            log.debug("No pipeline config for queue {}, skipping pre/post features", effectiveQueue);
-            return getChatResponse(pluginId, prompt);
-        }
-        PipelineConfiguration pipelineConfig = globalCtx.getConfiguration();
-        ExecutionTreeNode pluginNode = findPluginNodeByRef(pipelineConfig, pluginId);
-        if (pluginNode == null) {
-            log.debug("No PLUGIN node with pluginRef={} in pipeline {}, skipping pre/post", pluginId, effectiveQueue);
-            return getChatResponse(pluginId, prompt);
-        }
-        List<String> scopeFeatureNames = getScopeFeatureNames(pipelineConfig);
-        FeatureRegistry registry = FeatureRegistry.getInstance();
-        ResolvedPrePost resolved = FeatureAttachmentResolver.resolve(pluginNode, effectiveQueue, scopeFeatureNames, registry);
-        NodeExecutionContext context = new NodeExecutionContext(
-                pluginNode.getId(),
-                pluginNode.getType(),
-                pluginNode.getNodeType()
-        );
-        // Pre
-        for (String name : resolved.getPreExecution()) {
-            FeatureRegistry.FeatureEntry e = registry.get(name);
-            if (e == null) continue;
-            Object inst = e.getInstance();
-            if (inst instanceof PreNodeCall) {
-                ((PreNodeCall) inst).before(context);
-            }
-        }
-        String nodeResult = null;
-        try {
-            nodeResult = getChatResponse(pluginId, prompt);
-            return nodeResult != null ? nodeResult : "";
-        } finally {
-            // Post (run even if getChatResponse threw, so debug post still logs)
-            for (String name : resolved.getPostExecution()) {
-                FeatureRegistry.FeatureEntry e = registry.get(name);
-                if (e == null) continue;
-                Object inst = e.getInstance();
-                if (inst instanceof PostNodeCall) {
-                    try {
-                        ((PostNodeCall) inst).after(context, nodeResult);
-                    } catch (Throwable t) {
-                        log.warn("Post feature {} failed", name, t);
+        LocalContext localContext = LocalContext.forQueue(effectiveQueue);
+        if (localContext == null) {
+            try {
+                String taskQueue = Activity.getExecutionContext().getInfo().getActivityTaskQueue();
+                if (taskQueue != null) {
+                    localContext = LocalContext.forQueue(taskQueue);
+                    if (localContext != null) {
+                        effectiveQueue = taskQueue;
                     }
                 }
+            } catch (Exception e) {
+                // Not in activity context
             }
+        }
+        if (localContext == null) {
+            log.warn("No LocalContext for queue {}; cannot run execution tree", effectiveQueue);
+            return "";
+        }
+        PipelineConfiguration config = localContext.getPipelineConfiguration();
+        if (config == null || config.getPipelines() == null || config.getPipelines().isEmpty()) {
+            log.warn("No pipelines in config for queue {}", effectiveQueue);
+            return "";
+        }
+        String entryPipelineName = config.getPipelines().keySet().iterator().next();
+        Map<String, Object> inputValues = new LinkedHashMap<>();
+        for (com.olo.input.model.InputItem item : workflowInput.getInputs()) {
+            if (item != null && item.getName() != null) {
+                inputValues.put(item.getName(), item.getValue() != null ? item.getValue() : "");
+            }
+        }
+        try {
+            return ExecutionEngine.run(config, entryPipelineName, effectiveQueue, inputValues, pluginExecutor());
+        } catch (IllegalArgumentException e) {
+            log.warn("Execution engine validation failed: {}", e.getMessage());
+            return "";
         }
     }
 
-    private static List<String> getScopeFeatureNames(PipelineConfiguration pipelineConfig) {
-        List<String> names = new ArrayList<>();
-        if (pipelineConfig == null || pipelineConfig.getPipelines() == null) return names;
-        for (PipelineDefinition def : pipelineConfig.getPipelines().values()) {
-            Scope scope = def != null ? def.getScope() : null;
-            if (scope == null || scope.getFeatures() == null) continue;
-            for (FeatureDef f : scope.getFeatures()) {
-                if (f != null && f.getId() != null && !f.getId().isBlank()) {
-                    names.add(f.getId().trim());
+    private PluginInvoker.PluginExecutor pluginExecutor() {
+        return new PluginInvoker.PluginExecutor() {
+            @Override
+            public String execute(String pluginId, String inputsJson) {
+                return OloKernelActivitiesImpl.this.executePlugin(pluginId, inputsJson);
+            }
+            @Override
+            public String toJson(Map<String, Object> map) {
+                try {
+                    return MAPPER.writeValueAsString(map != null ? map : Map.of());
+                } catch (Exception e) {
+                    throw new RuntimeException("Failed to serialize plugin inputs", e);
                 }
             }
-            break; // use first pipeline's scope
-        }
-        return names;
-    }
-
-    private static ExecutionTreeNode findPluginNodeByRef(PipelineConfiguration pipelineConfig, String pluginRef) {
-        if (pipelineConfig == null || pipelineConfig.getPipelines() == null || pluginRef == null) return null;
-        for (PipelineDefinition def : pipelineConfig.getPipelines().values()) {
-            ExecutionTreeNode root = def != null ? def.getExecutionTree() : null;
-            ExecutionTreeNode found = findPluginNodeByRefRec(root, pluginRef);
-            if (found != null) return found;
-        }
-        return null;
-    }
-
-    private static ExecutionTreeNode findPluginNodeByRefRec(ExecutionTreeNode node, String pluginRef) {
-        if (node == null) return null;
-        if ("PLUGIN".equals(node.getType()) && pluginRef.equals(node.getPluginRef())) {
-            return node;
-        }
-        for (ExecutionTreeNode child : node.getChildren()) {
-            ExecutionTreeNode found = findPluginNodeByRefRec(child, pluginRef);
-            if (found != null) return found;
-        }
-        return null;
+            @Override
+            public Map<String, Object> fromJson(String json) {
+                try {
+                    return MAPPER.readValue(json != null ? json : "{}", MAP_TYPE);
+                } catch (Exception e) {
+                    log.warn("Failed to parse plugin outputs", e);
+                    return Map.of();
+                }
+            }
+        };
     }
 }

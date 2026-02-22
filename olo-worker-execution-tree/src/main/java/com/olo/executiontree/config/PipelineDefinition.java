@@ -28,6 +28,7 @@ public final class PipelineDefinition {
     private final ExecutionTreeNode executionTree;
     private final OutputContract outputContract;
     private final List<ResultMapping> resultMapping;
+    private final ExecutionType executionType;
 
     @JsonCreator
     public PipelineDefinition(
@@ -38,7 +39,8 @@ public final class PipelineDefinition {
             @JsonProperty("scope") Scope scope,
             @JsonProperty("executionTree") ExecutionTreeNode executionTree,
             @JsonProperty("outputContract") OutputContract outputContract,
-            @JsonProperty("resultMapping") List<ResultMapping> resultMapping) {
+            @JsonProperty("resultMapping") List<ResultMapping> resultMapping,
+            @JsonProperty("executionType") ExecutionType executionType) {
         this.name = name;
         this.workflowId = workflowId;
         this.inputContract = inputContract;
@@ -47,6 +49,7 @@ public final class PipelineDefinition {
         this.executionTree = executionTree;
         this.outputContract = outputContract;
         this.resultMapping = resultMapping != null ? List.copyOf(resultMapping) : List.of();
+        this.executionType = executionType != null ? executionType : ExecutionType.SYNC;
     }
 
     /** Pipeline name (used as key in the pipelines map). */
@@ -84,11 +87,16 @@ public final class PipelineDefinition {
         return resultMapping;
     }
 
+    /** SYNC (default) or ASYNC. When ASYNC, all nodes except JOIN run in a worker thread. */
+    public ExecutionType getExecutionType() {
+        return executionType;
+    }
+
     /** Returns a new pipeline definition with the given execution tree (e.g. after ensuring unique node ids). */
     public PipelineDefinition withExecutionTree(ExecutionTreeNode executionTree) {
         return new PipelineDefinition(
                 name, workflowId, inputContract, variableRegistry, scope,
-                executionTree, outputContract, resultMapping);
+                executionTree, outputContract, resultMapping, executionType);
     }
 
     @Override
@@ -102,12 +110,13 @@ public final class PipelineDefinition {
                 && Objects.equals(scope, that.scope)
                 && Objects.equals(executionTree, that.executionTree)
                 && Objects.equals(outputContract, that.outputContract)
-                && Objects.equals(resultMapping, that.resultMapping);
+                && Objects.equals(resultMapping, that.resultMapping)
+                && executionType == that.executionType;
     }
 
     @Override
     public int hashCode() {
         return Objects.hash(name, workflowId, inputContract, variableRegistry, scope, executionTree,
-                outputContract, resultMapping);
+                outputContract, resultMapping, executionType);
     }
 }

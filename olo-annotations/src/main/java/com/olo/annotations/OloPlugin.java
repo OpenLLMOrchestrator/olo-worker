@@ -23,6 +23,9 @@ public @interface OloPlugin {
     /** Contract type (e.g. MODEL_EXECUTOR, EMBEDDING). */
     String contractType();
 
+    /** Plugin contract version (e.g. 1.0) for compatibility checks; config scope can require this version. */
+    String contractVersion() default "1.0";
+
     /** Optional description. */
     String description() default "";
 

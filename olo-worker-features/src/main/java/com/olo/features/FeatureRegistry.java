@@ -45,10 +45,12 @@ public final class FeatureRegistry {
         if (name == null || name.isBlank()) {
             throw new IllegalArgumentException("@OloFeature name must be non-blank: " + clazz.getName());
         }
+        String contractVersion = ann.contractVersion() != null && !ann.contractVersion().isBlank() ? ann.contractVersion() : null;
         FeatureEntry entry = new FeatureEntry(
                 name,
                 ann.phase(),
                 ann.applicableNodeTypes(),
+                contractVersion,
                 featureInstance
         );
         if (byName.putIfAbsent(name, entry) != null) {
@@ -60,12 +62,22 @@ public final class FeatureRegistry {
      * Registers a feature with explicit metadata (e.g. when not using the annotation).
      */
     public void register(String name, FeaturePhase phase, String[] applicableNodeTypes, Object featureInstance) {
+        register(name, phase, applicableNodeTypes, null, featureInstance);
+    }
+
+    public void register(String name, FeaturePhase phase, String[] applicableNodeTypes, String contractVersion, Object featureInstance) {
         Objects.requireNonNull(name, "name");
         if (name.isBlank()) throw new IllegalArgumentException("name must be non-blank");
-        FeatureEntry entry = new FeatureEntry(name, phase, applicableNodeTypes, featureInstance);
+        FeatureEntry entry = new FeatureEntry(name, phase != null ? phase : FeaturePhase.PRE_FINALLY, applicableNodeTypes, contractVersion, featureInstance);
         if (byName.putIfAbsent(name, entry) != null) {
             throw new IllegalArgumentException("Feature already registered: " + name);
         }
+    }
+
+    /** Returns the contract version for the feature, or null if unknown. */
+    public String getContractVersion(String name) {
+        FeatureEntry e = get(name);
+        return e != null ? e.getContractVersion() : null;
     }
 
     public FeatureEntry get(String name) {
@@ -104,22 +116,30 @@ public final class FeatureRegistry {
         private final String name;
         private final FeaturePhase phase;
         private final String[] applicableNodeTypes;
+        private final String contractVersion;
         private final Object instance;
 
-        FeatureEntry(String name, FeaturePhase phase, String[] applicableNodeTypes, Object instance) {
+        FeatureEntry(String name, FeaturePhase phase, String[] applicableNodeTypes, String contractVersion, Object instance) {
             this.name = name;
-            this.phase = phase != null ? phase : FeaturePhase.PRE_POST;
+            this.phase = phase != null ? phase : FeaturePhase.PRE_FINALLY;
             this.applicableNodeTypes = applicableNodeTypes != null ? applicableNodeTypes.clone() : new String[0];
+            this.contractVersion = contractVersion;
             this.instance = instance;
         }
 
         public String getName() { return name; }
         public FeaturePhase getPhase() { return phase; }
+        /** Contract version (e.g. 1.0) for config compatibility; null = unknown. */
+        public String getContractVersion() { return contractVersion; }
         public String[] getApplicableNodeTypes() { return applicableNodeTypes.length == 0 ? applicableNodeTypes : applicableNodeTypes.clone(); }
         public Object getInstance() { return instance; }
 
-        public boolean isPre() { return phase == FeaturePhase.PRE || phase == FeaturePhase.PRE_POST; }
-        public boolean isPost() { return phase == FeaturePhase.POST || phase == FeaturePhase.PRE_POST; }
+        public boolean isPre() { return phase == FeaturePhase.PRE || phase == FeaturePhase.PRE_FINALLY; }
+        /** Legacy: true if feature runs in any post phase. */
+        public boolean isPost() { return isPostSuccess() || isPostError() || isFinally(); }
+        public boolean isPostSuccess() { return phase == FeaturePhase.POST_SUCCESS || phase == FeaturePhase.PRE_FINALLY; }
+        public boolean isPostError() { return phase == FeaturePhase.POST_ERROR || phase == FeaturePhase.PRE_FINALLY; }
+        public boolean isFinally() { return phase == FeaturePhase.FINALLY || phase == FeaturePhase.PRE_FINALLY; }
 
         public boolean appliesTo(String nodeType, String type) {
             if (applicableNodeTypes.length == 0) return true;

@@ -3,9 +3,13 @@ package com.olo.worker;
 import com.olo.bootstrap.GlobalContext;
 import com.olo.bootstrap.OloBootstrap;
 import com.olo.config.OloSessionCache;
+import com.olo.executiontree.config.PipelineConfiguration;
 import com.olo.features.FeatureRegistry;
 import com.olo.features.debug.DebuggerFeature;
+import com.olo.plugin.PluginRegistry;
 import com.olo.plugin.ollama.OllamaModelExecutorPlugin;
+import com.olo.worker.config.ConfigCompatibilityValidator;
+import com.olo.worker.config.ConfigIncompatibleException;
 import com.olo.worker.activity.OloKernelActivitiesImpl;
 import com.olo.worker.workflow.OloKernelWorkflowImpl;
 import io.temporal.client.WorkflowClient;
@@ -49,6 +53,9 @@ public final class OloWorkerApplication {
 
         FeatureRegistry.getInstance().register(new DebuggerFeature());
         log.info("Registered debug feature (pre/post logs when using -debug pipeline)");
+
+        // Version checks (config, plugin contract, feature contract) run at bootstrap / config load
+        validateAllPipelineConfigs(ctx);
 
         String temporalTarget = ctx.getTemporalTargetOrDefault("localhost:7233");
         String temporalNamespace = ctx.getTemporalNamespaceOrDefault("default");
@@ -117,5 +124,26 @@ public final class OloWorkerApplication {
                 log.error("Error during worker shutdown: {}", ex.getMessage());
             }
         }
+    }
+
+    /**
+     * Validates all pipeline configs (config version, plugin contract version, feature contract version).
+     * Called after plugins and features are registered so contract checks can run.
+     * Fails startup if any config is incompatible (stops before breaking changes).
+     */
+    private static void validateAllPipelineConfigs(GlobalContext ctx) {
+        ConfigCompatibilityValidator validator = new ConfigCompatibilityValidator(
+                null, null,
+                PluginRegistry.getInstance(),
+                FeatureRegistry.getInstance());
+        for (PipelineConfiguration config : ctx.getPipelineConfigByQueue().values()) {
+            try {
+                validator.validateOrThrow(config);
+            } catch (ConfigIncompatibleException e) {
+                log.error("Config compatibility check failed at bootstrap: {}", e.getMessage());
+                throw e;
+            }
+        }
+        log.info("Config version checks passed for all pipeline configs");
     }
 }

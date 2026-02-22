@@ -18,6 +18,7 @@ repositories {
 dependencies {
     implementation project(':olo-worker-bootstrap')
     implementation project(':olo-worker-configuration')
+    implementation project(':olo-worker-execution-context')
     implementation project(':olo-worker-execution-tree')
     implementation project(':olo-worker-features')
     implementation project(':olo-worker-input')

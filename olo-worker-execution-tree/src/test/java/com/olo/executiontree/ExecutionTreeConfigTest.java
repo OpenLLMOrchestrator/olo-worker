@@ -9,6 +9,7 @@ import com.olo.executiontree.scope.Scope;
 import com.olo.executiontree.outputcontract.OutputContract;
 import com.olo.executiontree.outputcontract.ResultMapping;
 import com.olo.executiontree.tree.ExecutionTreeNode;
+import com.olo.executiontree.tree.NodeType;
 import com.olo.executiontree.tree.ParameterMapping;
 import com.olo.executiontree.variableregistry.VariableRegistryEntry;
 import com.olo.executiontree.variableregistry.VariableScope;
@@ -155,12 +156,12 @@ class ExecutionTreeConfigTest {
         ExecutionTreeNode root = pipeline.getExecutionTree();
         assertNotNull(root);
         assertEquals("root", root.getId());
-        assertEquals("SEQUENCE", root.getType());
+        assertEquals(NodeType.SEQUENCE, root.getType());
         assertEquals(1, root.getChildren().size());
 
         ExecutionTreeNode modelNode = root.getChildren().get(0);
         assertEquals("modelNode", modelNode.getId());
-        assertEquals("PLUGIN", modelNode.getType());
+        assertEquals(NodeType.PLUGIN, modelNode.getType());
         assertEquals("MODEL_EXECUTOR", modelNode.getNodeType());
         assertEquals("GPT4_EXECUTOR", modelNode.getPluginRef());
         assertEquals(List.of(new ParameterMapping("prompt", "userQuery")), modelNode.getInputMappings());
