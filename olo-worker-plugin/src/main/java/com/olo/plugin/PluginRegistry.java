@@ -6,15 +6,16 @@ import java.util.Objects;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
- * Global registry of plugins by id and contract type. Register implementations
- * (e.g. {@link ModelExecutorPlugin}) so the worker can resolve {@code pluginRef}
+ * Tenant-scoped registry of plugins by tenant id and plugin id. Register implementations
+ * (e.g. {@link ModelExecutorPlugin}) per tenant so the worker can resolve {@code pluginRef}
  * from execution tree nodes and invoke the plugin with input/output mappings.
  */
 public final class PluginRegistry {
 
     private static final PluginRegistry INSTANCE = new PluginRegistry();
 
-    private final Map<String, PluginEntry> byId = new ConcurrentHashMap<>();
+    /** tenantId → (pluginId → PluginEntry) */
+    private final Map<String, Map<String, PluginEntry>> pluginsByTenant = new ConcurrentHashMap<>();
 
     public static PluginRegistry getInstance() {
         return INSTANCE;
@@ -24,60 +25,75 @@ public final class PluginRegistry {
     }
 
     /**
-     * Registers a model-executor plugin under the given id.
+     * Registers a model-executor plugin for the given tenant under the given id.
      *
-     * @param id     plugin id (must match scope plugin id and tree node pluginRef)
-     * @param plugin implementation
-     * @throws IllegalArgumentException if id is blank or already registered
+     * @param tenantId tenant id (e.g. from OLO_TENANT_IDS or olo:tenants)
+     * @param id       plugin id (must match scope plugin id and tree node pluginRef)
+     * @param plugin   implementation
+     * @throws IllegalArgumentException if tenantId or id is blank, or plugin already registered for this tenant
      */
-    public void registerModelExecutor(String id, ModelExecutorPlugin plugin) {
-        register(id, ContractType.MODEL_EXECUTOR, "1.0", plugin);
+    public void registerModelExecutor(String tenantId, String id, ModelExecutorPlugin plugin) {
+        register(tenantId, id, ContractType.MODEL_EXECUTOR, "1.0", plugin);
     }
 
     /**
-     * Registers a plugin under the given id and contract type.
+     * Registers a plugin for the given tenant under the given id and contract type.
      *
+     * @param tenantId    tenant id
      * @param id          plugin id
      * @param contractType {@link ContractType#MODEL_EXECUTOR} or {@link ContractType#EMBEDDING}
      * @param plugin      implementation (e.g. {@link ModelExecutorPlugin})
-     * @throws IllegalArgumentException if id is blank or already registered
      */
-    public void register(String id, String contractType, Object plugin) {
-        register(id, contractType, null, plugin);
+    public void register(String tenantId, String id, String contractType, Object plugin) {
+        register(tenantId, id, contractType, null, plugin);
     }
 
     /**
-     * Registers a plugin with an explicit contract version for config compatibility checks.
+     * Registers a plugin for the given tenant with an explicit contract version.
      *
-     * @param id             plugin id
-     * @param contractType   contract type
+     * @param tenantId        tenant id
+     * @param id              plugin id
+     * @param contractType    contract type
      * @param contractVersion contract version (e.g. 1.0); null = unknown (version check skipped)
-     * @param plugin         implementation
+     * @param plugin          implementation
      */
-    public void register(String id, String contractType, String contractVersion, Object plugin) {
+    public void register(String tenantId, String id, String contractType, String contractVersion, Object plugin) {
         Objects.requireNonNull(plugin, "plugin");
-        String tid = Objects.requireNonNull(id, "id").trim();
-        if (tid.isEmpty()) {
+        String tid = normalize(tenantId);
+        String pid = Objects.requireNonNull(id, "id").trim();
+        if (pid.isEmpty()) {
             throw new IllegalArgumentException("Plugin id must be non-blank");
         }
-        PluginEntry entry = new PluginEntry(tid, contractType, contractVersion, plugin);
-        if (byId.putIfAbsent(tid, entry) != null) {
-            throw new IllegalArgumentException("Plugin already registered: " + id);
+        Map<String, PluginEntry> byId = pluginsByTenant.computeIfAbsent(tid, k -> new ConcurrentHashMap<>());
+        PluginEntry entry = new PluginEntry(pid, contractType, contractVersion, plugin);
+        if (byId.putIfAbsent(pid, entry) != null) {
+            throw new IllegalArgumentException("Plugin already registered for tenant " + tid + ": " + id);
         }
     }
 
-    /**
-     * Returns the plugin entry for the given id, or null if not registered.
-     */
-    public PluginEntry get(String id) {
-        return id == null ? null : byId.get(id.trim());
+    private static String normalize(String tenantId) {
+        if (tenantId == null || tenantId.isBlank()) return "default";
+        return tenantId.trim();
     }
 
     /**
-     * Returns the model-executor plugin for the given id, or null if not registered or not a model executor.
+     * Returns the plugin entry for the given tenant and plugin id, or null if not registered.
+     *
+     * @param tenantId tenant id
+     * @param pluginId plugin id
+     * @return entry or null
      */
-    public ModelExecutorPlugin getModelExecutor(String id) {
-        PluginEntry e = get(id);
+    public PluginEntry get(String tenantId, String pluginId) {
+        if (pluginId == null || pluginId.isBlank()) return null;
+        Map<String, PluginEntry> byId = pluginsByTenant.get(normalize(tenantId));
+        return byId != null ? byId.get(pluginId.trim()) : null;
+    }
+
+    /**
+     * Returns the model-executor plugin for the given tenant and id, or null if not registered or not a model executor.
+     */
+    public ModelExecutorPlugin getModelExecutor(String tenantId, String pluginId) {
+        PluginEntry e = get(tenantId, pluginId);
         if (e == null || !ContractType.MODEL_EXECUTOR.equals(e.getContractType())) {
             return null;
         }
@@ -85,19 +101,20 @@ public final class PluginRegistry {
         return p instanceof ModelExecutorPlugin ? (ModelExecutorPlugin) p : null;
     }
 
-    /** Returns the contract version for the plugin, or null if unknown. */
-    public String getContractVersion(String id) {
-        PluginEntry e = get(id);
+    /** Returns the contract version for the plugin in the given tenant, or null if unknown. */
+    public String getContractVersion(String tenantId, String pluginId) {
+        PluginEntry e = get(tenantId, pluginId);
         return e != null ? e.getContractVersion() : null;
     }
 
-    public Map<String, PluginEntry> getAll() {
-        return Collections.unmodifiableMap(byId);
+    /** Returns the full structure: tenant id → (plugin id → entry). For iteration and shutdown. */
+    public Map<String, Map<String, PluginEntry>> getAllByTenant() {
+        return Collections.unmodifiableMap(pluginsByTenant);
     }
 
     /** Removes all registrations (mainly for tests). */
     public void clear() {
-        byId.clear();
+        pluginsByTenant.clear();
     }
 
     /**

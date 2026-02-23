@@ -30,12 +30,23 @@ public final class OloConfig {
     private static final String ENV_CONFIG_VERSION = "OLO_CONFIG_VERSION";
     private static final String ENV_CONFIG_RETRY_WAIT_SECONDS = "OLO_CONFIG_RETRY_WAIT_SECONDS";
     private static final String ENV_CONFIG_KEY_PREFIX = "OLO_CONFIG_KEY_PREFIX";
+    private static final String ENV_TENANT_IDS = "OLO_TENANT_IDS";
+    private static final String ENV_DEFAULT_TENANT_ID = "OLO_DEFAULT_TENANT_ID";
+    private static final String ENV_RUN_LEDGER = "OLO_RUN_LEDGER";
+    private static final String ENV_DB_NAME = "OLO_DB_NAME";
+    private static final String ENV_DB_USER = "OLO_DB_USER";
+    private static final String ENV_DB_PASSWORD = "OLO_DB_PASSWORD";
 
+    private static final String DEFAULT_TENANT_ID = "2a2a91fb-f5b4-4cf0-b917-524d242b2e3d";
+    /** Default true during development; set false in production to avoid ledger overhead. */
+    private static final boolean DEFAULT_RUN_LEDGER = true;
+    private static final String DEFAULT_DB_NAME = "temporal";
     private static final String DEFAULT_CONFIG_DIR = "config";
     private static final String DEFAULT_CONFIG_VERSION = "1.0";
     private static final int DEFAULT_CONFIG_RETRY_WAIT_SECONDS = 30;
-    private static final String DEFAULT_CONFIG_KEY_PREFIX = "olo:kernel:config";
-    private static final String DEFAULT_SESSION_DATA_PREFIX = "olo:kernel:sessions:";
+    private static final String TENANT_PLACEHOLDER = "<tenant>";
+    private static final String DEFAULT_CONFIG_KEY_PREFIX = "<tenant>:olo:kernel:config";
+    private static final String DEFAULT_SESSION_DATA_PREFIX = "<tenant>:olo:kernel:sessions:";
     private static final int DEFAULT_MAX_LOCAL_MESSAGE_SIZE = 50;
 
     private final List<String> taskQueues;
@@ -50,6 +61,11 @@ public final class OloConfig {
     private final String pipelineConfigVersion;
     private final int pipelineConfigRetryWaitSeconds;
     private final String pipelineConfigKeyPrefix;
+    private final List<String> tenantIds;
+    private final boolean runLedgerEnabled;
+    private final String dbName;
+    private final String dbUser;
+    private final String dbPassword;
 
     private OloConfig(Builder b) {
         this.taskQueues = Collections.unmodifiableList(new ArrayList<>(b.taskQueues));
@@ -64,6 +80,66 @@ public final class OloConfig {
         this.pipelineConfigVersion = b.pipelineConfigVersion;
         this.pipelineConfigRetryWaitSeconds = b.pipelineConfigRetryWaitSeconds;
         this.pipelineConfigKeyPrefix = b.pipelineConfigKeyPrefix;
+        this.tenantIds = Collections.unmodifiableList(new ArrayList<>(b.tenantIds));
+        this.runLedgerEnabled = b.runLedgerEnabled;
+        this.dbName = b.dbName != null ? b.dbName : DEFAULT_DB_NAME;
+        this.dbUser = b.dbUser != null ? b.dbUser : "temporal";
+        this.dbPassword = b.dbPassword != null ? b.dbPassword : "pgpass";
+    }
+
+    /**
+     * Normalizes tenant id for use in keys: null/blank → OLO_DEFAULT_TENANT_ID from env, or {@value #DEFAULT_TENANT_ID}.
+     */
+    public static String normalizeTenantId(String tenantId) {
+        if (tenantId == null || tenantId.isBlank()) {
+            String envDefault = System.getenv(ENV_DEFAULT_TENANT_ID);
+            return (envDefault != null && !envDefault.isBlank()) ? envDefault.trim() : DEFAULT_TENANT_ID;
+        }
+        return tenantId.trim();
+    }
+
+    /**
+     * Tenant ids to load config for at bootstrap (e.g. from OLO_TENANT_IDS). Default {@code ["default"]}.
+     * All Redis keys and DB data are scoped by tenant: {@code olo:<tenantId>:...}.
+     */
+    public List<String> getTenantIds() {
+        return tenantIds;
+    }
+
+    /**
+     * Session key prefix scoped by tenant. Default base is {@code <tenant>:olo:kernel:sessions:};
+     * returns e.g. {@code default:olo:kernel:sessions:} for tenantId "default".
+     */
+    public String getSessionDataPrefix(String tenantId) {
+        return scopePrefixWithTenant(sessionDataPrefix, normalizeTenantId(tenantId));
+    }
+
+    /**
+     * Pipeline config Redis key prefix scoped by tenant. Default base is {@code <tenant>:olo:kernel:config};
+     * returns e.g. {@code default:olo:kernel:config} for tenantId "default".
+     */
+    public String getPipelineConfigKeyPrefix(String tenantId) {
+        return scopePrefixWithTenant(pipelineConfigKeyPrefix, normalizeTenantId(tenantId));
+    }
+
+    /**
+     * Redis key for the tenant's active workflow count. Use with INCR on start and DECR on end.
+     * Key format: {@code <tenantId>:olo:quota:activeWorkflows}.
+     */
+    public String getActiveWorkflowsQuotaKey(String tenantId) {
+        return normalizeTenantId(tenantId) + ":olo:quota:activeWorkflows";
+    }
+
+    private static String scopePrefixWithTenant(String basePrefix, String tenantId) {
+        if (basePrefix == null) return null;
+        if (basePrefix.contains(TENANT_PLACEHOLDER)) {
+            return basePrefix.replace(TENANT_PLACEHOLDER, tenantId);
+        }
+        // Backward compatibility: old env value "olo:kernel:config" or "olo:kernel:sessions:" → "<tenantId>:olo:..."
+        if (basePrefix.startsWith("olo:")) {
+            return tenantId + ":olo:" + basePrefix.substring(4);
+        }
+        return basePrefix;
     }
 
     /**
@@ -94,6 +170,26 @@ public final class OloConfig {
         return dbPort;
     }
 
+    /** Whether run ledger is enabled (OLO_RUN_LEDGER). When true, run/node data is persisted to DB. Default true during development. */
+    public boolean isRunLedgerEnabled() {
+        return runLedgerEnabled;
+    }
+
+    /** Database name for ledger (OLO_DB_NAME). Default "olo". */
+    public String getDbName() {
+        return dbName;
+    }
+
+    /** Database user for ledger (OLO_DB_USER). Default "olo". */
+    public String getDbUser() {
+        return dbUser;
+    }
+
+    /** Database password for ledger (OLO_DB_PASSWORD). Default "". */
+    public String getDbPassword() {
+        return dbPassword;
+    }
+
     /**
      * Max size (characters) for inline LOCAL string values. Larger values should be stored in cache (e.g. Redis) and the key shared. Default 50.
      */
@@ -102,8 +198,8 @@ public final class OloConfig {
     }
 
     /**
-     * Prefix for session keys (e.g. Redis). Default {@code olo:kernel:sessions:}.
-     * Use with {@link #getSessionUserInputKey(String)} to store workflow input per transaction.
+     * Prefix for session keys (e.g. Redis). Default {@code <tenant>:olo:kernel:sessions:}.
+     * Use {@link #getSessionDataPrefix(String)} for a tenant-scoped key. Use with {@link #getSessionUserInputKey(String)} for the template (tenant must be applied elsewhere).
      */
     public String getSessionDataPrefix() {
         return sessionDataPrefix;
@@ -111,7 +207,8 @@ public final class OloConfig {
 
     /**
      * Session key for storing workflow user input: {@code <sessionDataPrefix><transactionId>:USERINPUT}.
-     * Example: {@code olo:kernel:sessions:8huqpd42mizzgjOhJEH9C:USERINPUT}.
+     * Prefer building with {@link #getSessionDataPrefix(String)} + transactionId + ":USERINPUT" for tenant-scoped keys.
+     * Example: {@code default:olo:kernel:sessions:8huqpd42mizzgjOhJEH9C:USERINPUT}.
      */
     public String getSessionUserInputKey(String transactionId) {
         return sessionDataPrefix + (transactionId != null ? transactionId : "") + ":USERINPUT";
@@ -132,7 +229,7 @@ public final class OloConfig {
         return pipelineConfigRetryWaitSeconds;
     }
 
-    /** Redis key prefix for pipeline config (e.g. olo:kernel:config). */
+    /** Redis key prefix for pipeline config. Default {@code <tenant>:olo:kernel:config}. Use {@link #getPipelineConfigKeyPrefix(String)} for tenant-scoped prefix. */
     public String getPipelineConfigKeyPrefix() {
         return pipelineConfigKeyPrefix;
     }
@@ -152,6 +249,9 @@ public final class OloConfig {
             }
         }
 
+        List<String> tenants = parseCommaSeparated(System.getenv(ENV_TENANT_IDS));
+        if (tenants.isEmpty()) tenants = List.of(DEFAULT_TENANT_ID);
+
         return builder()
                 .taskQueues(allQueues)
                 .debugQueueEnabled(isDebug)
@@ -165,6 +265,11 @@ public final class OloConfig {
                 .pipelineConfigVersion(getEnv(ENV_CONFIG_VERSION, DEFAULT_CONFIG_VERSION))
                 .pipelineConfigRetryWaitSeconds(parseInt(System.getenv(ENV_CONFIG_RETRY_WAIT_SECONDS), DEFAULT_CONFIG_RETRY_WAIT_SECONDS))
                 .pipelineConfigKeyPrefix(getEnv(ENV_CONFIG_KEY_PREFIX, DEFAULT_CONFIG_KEY_PREFIX))
+                .tenantIds(tenants)
+                .runLedgerEnabled(parseBoolean(System.getenv(ENV_RUN_LEDGER), DEFAULT_RUN_LEDGER))
+                .dbName(getEnv(ENV_DB_NAME, DEFAULT_DB_NAME))
+                .dbUser(getEnv(ENV_DB_USER, "temporal"))
+                .dbPassword(getEnv(ENV_DB_PASSWORD, "pgpass"))
                 .build();
     }
 
@@ -218,6 +323,11 @@ public final class OloConfig {
         private String pipelineConfigVersion = DEFAULT_CONFIG_VERSION;
         private int pipelineConfigRetryWaitSeconds = DEFAULT_CONFIG_RETRY_WAIT_SECONDS;
         private String pipelineConfigKeyPrefix = DEFAULT_CONFIG_KEY_PREFIX;
+        private List<String> tenantIds = List.of(DEFAULT_TENANT_ID);
+        private boolean runLedgerEnabled = DEFAULT_RUN_LEDGER;
+        private String dbName = DEFAULT_DB_NAME;
+        private String dbUser = "olo";
+        private String dbPassword = "";
 
         public Builder taskQueues(List<String> taskQueues) {
             this.taskQueues = Objects.requireNonNull(taskQueues, "taskQueues");
@@ -276,6 +386,31 @@ public final class OloConfig {
 
         public Builder pipelineConfigKeyPrefix(String pipelineConfigKeyPrefix) {
             this.pipelineConfigKeyPrefix = pipelineConfigKeyPrefix != null ? pipelineConfigKeyPrefix : DEFAULT_CONFIG_KEY_PREFIX;
+            return this;
+        }
+
+        public Builder tenantIds(List<String> tenantIds) {
+            this.tenantIds = tenantIds != null ? new ArrayList<>(tenantIds) : List.of(DEFAULT_TENANT_ID);
+            return this;
+        }
+
+        public Builder runLedgerEnabled(boolean runLedgerEnabled) {
+            this.runLedgerEnabled = runLedgerEnabled;
+            return this;
+        }
+
+        public Builder dbName(String dbName) {
+            this.dbName = dbName;
+            return this;
+        }
+
+        public Builder dbUser(String dbUser) {
+            this.dbUser = dbUser;
+            return this;
+        }
+
+        public Builder dbPassword(String dbPassword) {
+            this.dbPassword = dbPassword;
             return this;
         }
 

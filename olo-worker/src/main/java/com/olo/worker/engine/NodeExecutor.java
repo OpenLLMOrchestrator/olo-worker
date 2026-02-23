@@ -10,6 +10,7 @@ import com.olo.features.NodeExecutionContext;
 import com.olo.features.PostNodeCall;
 import com.olo.features.PreNodeCall;
 import com.olo.features.ResolvedPrePost;
+import com.olo.ledger.LedgerContext;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -35,33 +36,67 @@ public final class NodeExecutor {
     private final PipelineConfiguration config;
     private final ExecutionType executionType;
     private final ExecutorService executor;
+    private final String tenantId;
+    private final Map<String, Object> tenantConfigMap;
+    private final String ledgerRunId;
 
     public NodeExecutor(PluginInvoker pluginInvoker, PipelineConfiguration config,
-                        ExecutionType executionType, ExecutorService executor) {
+                        ExecutionType executionType, ExecutorService executor,
+                        String tenantId, Map<String, Object> tenantConfigMap,
+                        String ledgerRunId) {
         this.pluginInvoker = pluginInvoker;
         this.config = config;
         this.executionType = executionType != null ? executionType : ExecutionType.SYNC;
         this.executor = executor;
+        this.tenantId = tenantId != null ? tenantId : "";
+        this.tenantConfigMap = tenantConfigMap != null ? Map.copyOf(tenantConfigMap) : Map.of();
+        this.ledgerRunId = ledgerRunId;
+    }
+
+    /** Constructor without ledger run id (e.g. SUB_PIPELINE or single-pipeline run). */
+    public NodeExecutor(PluginInvoker pluginInvoker, PipelineConfiguration config,
+                        ExecutionType executionType, ExecutorService executor,
+                        String tenantId, Map<String, Object> tenantConfigMap) {
+        this(pluginInvoker, config, executionType, executor, tenantId, tenantConfigMap, null);
     }
 
     public void executeNode(ExecutionTreeNode node, PipelineDefinition pipeline,
                             VariableEngine variableEngine, String queueName) {
         if (node == null) return;
-        boolean runAsync = executionType == ExecutionType.ASYNC
-                && executor != null
-                && node.getType() != NodeType.JOIN;
-        if (runAsync) {
-            Future<?> future = executor.submit(() ->
-                    executeNodeSync(node, pipeline, variableEngine, queueName));
-            try {
-                future.get();
-            } catch (Exception e) {
-                Throwable cause = e.getCause() != null ? e.getCause() : e;
-                if (cause instanceof RuntimeException re) throw re;
-                throw new RuntimeException(cause);
+        if (ledgerRunId != null && !ledgerRunId.isBlank()) {
+            LedgerContext.setRunId(ledgerRunId);
+        }
+        try {
+            boolean runAsync = executionType == ExecutionType.ASYNC
+                    && executor != null
+                    && node.getType() != NodeType.JOIN;
+            if (runAsync) {
+                Future<?> future = executor.submit(() -> {
+                    if (ledgerRunId != null && !ledgerRunId.isBlank()) {
+                        LedgerContext.setRunId(ledgerRunId);
+                    }
+                    try {
+                        executeNodeSync(node, pipeline, variableEngine, queueName);
+                    } finally {
+                        if (ledgerRunId != null && !ledgerRunId.isBlank()) {
+                            LedgerContext.clear();
+                        }
+                    }
+                });
+                try {
+                    future.get();
+                } catch (Exception e) {
+                    Throwable cause = e.getCause() != null ? e.getCause() : e;
+                    if (cause instanceof RuntimeException re) throw re;
+                    throw new RuntimeException(cause);
+                }
+            } else {
+                executeNodeSync(node, pipeline, variableEngine, queueName);
             }
-        } else {
-            executeNodeSync(node, pipeline, variableEngine, queueName);
+        } finally {
+            if (ledgerRunId != null && !ledgerRunId.isBlank()) {
+                LedgerContext.clear();
+            }
         }
     }
 
@@ -69,18 +104,23 @@ public final class NodeExecutor {
                                  VariableEngine variableEngine, String queueName) {
         FeatureRegistry registry = FeatureRegistry.getInstance();
         ResolvedPrePost resolved = FeatureResolver.resolve(node, queueName, pipeline.getScope(), registry);
+        boolean isPlugin = node.getType() == NodeType.PLUGIN;
+        String pluginId = isPlugin && node.getPluginRef() != null ? node.getPluginRef() : null;
         NodeExecutionContext context = new NodeExecutionContext(
-                node.getId(), node.getType().getTypeName(), node.getNodeType());
+                node.getId(), node.getType().getTypeName(), node.getNodeType(), null, tenantId, tenantConfigMap,
+                queueName, pluginId, null);
         runPre(resolved, context, registry);
         Object nodeResult = null;
+        boolean executionSucceeded = false;
         try {
             nodeResult = dispatchExecute(node, pipeline, variableEngine, queueName);
-            runPostSuccess(resolved, context, nodeResult, registry);
+            executionSucceeded = true;
+            runPostSuccess(resolved, context.withExecutionSucceeded(true), nodeResult, registry);
         } catch (Throwable t) {
-            runPostError(resolved, context, null, registry);
+            runPostError(resolved, context.withExecutionSucceeded(false), null, registry);
             throw t;
         } finally {
-            runFinally(resolved, context, nodeResult, registry);
+            runFinally(resolved, context.withExecutionSucceeded(executionSucceeded), nodeResult, registry);
         }
     }
 

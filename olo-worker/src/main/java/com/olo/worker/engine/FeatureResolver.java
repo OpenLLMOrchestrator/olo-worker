@@ -34,6 +34,11 @@ public final class FeatureResolver {
         Objects.requireNonNull(node, "node");
         Objects.requireNonNull(registry, "registry");
         List<String> scopeFeatureNames = getScopeFeatureNames(scope);
+        // When run ledger is enabled, ledger-node is registered but may not be in pipeline scope; attach it so olo_run_node is populated.
+        if (registry.get("ledger-node") != null && !scopeFeatureNames.contains("ledger-node")) {
+            scopeFeatureNames = new ArrayList<>(scopeFeatureNames);
+            scopeFeatureNames.add("ledger-node");
+        }
         return FeatureAttachmentResolver.resolve(node, queueName, scopeFeatureNames, registry);
     }
 

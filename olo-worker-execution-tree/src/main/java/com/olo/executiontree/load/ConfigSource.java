@@ -24,4 +24,12 @@ public interface ConfigSource {
      * @return configuration JSON if present
      */
     Optional<String> getFromDb(String queueName, String version);
+
+    /**
+     * Gets configuration JSON from the database by tenant, queue name and version.
+     * Tables should include tenant_id for multi-tenant separation.
+     */
+    default Optional<String> getFromDb(String tenantId, String queueName, String version) {
+        return getFromDb(queueName, version);
+    }
 }

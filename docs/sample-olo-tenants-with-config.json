@@ -1,0 +1,20 @@
+[
+  {
+    "id": "2a2a91fb-f5b4-4cf0-b917-524d242b2e3d",
+    "name": "Default tenant",
+    "config": {
+      "ollamaBaseUrl": "http://localhost:11434",
+      "ollamaModel": "llama3.2",
+      "restrictions": []
+    }
+  },
+  {
+    "id": "tenant-acme",
+    "name": "Acme",
+    "config": {
+      "ollamaBaseUrl": "http://ollama.acme.internal:11434",
+      "ollamaModel": "llama3.2",
+      "restrictions": ["no-export", "audit-log"]
+    }
+  }
+]

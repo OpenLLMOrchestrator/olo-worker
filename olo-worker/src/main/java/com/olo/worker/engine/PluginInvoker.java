@@ -2,6 +2,7 @@ package com.olo.worker.engine;
 
 import com.olo.executiontree.tree.ExecutionTreeNode;
 import com.olo.executiontree.tree.ParameterMapping;
+import com.olo.features.PluginExecutionResult;
 
 import java.util.LinkedHashMap;
 import java.util.Map;
@@ -9,6 +10,9 @@ import java.util.Map;
 /**
  * Single responsibility: invoke a plugin node (inputMappings → plugin → outputMappings).
  * Reads variables from the engine, calls the plugin, writes outputs back.
+ * Measures duration at the exact execution boundary and returns {@link PluginExecutionResult}
+ * so features get duration and success without recomputation (and so retry/wrapping logic
+ * does not skew timing).
  */
 public final class PluginInvoker {
 
@@ -19,11 +23,11 @@ public final class PluginInvoker {
     }
 
     /**
-     * Executes the PLUGIN node: builds inputs from inputMappings, calls plugin, applies outputMappings.
+     * Executes the PLUGIN node: builds inputs, calls plugin (timing inside this method), applies outputMappings.
      *
      * @param node          PLUGIN node (pluginRef, inputMappings, outputMappings)
      * @param variableEngine variable map (read inputs, write outputs)
-     * @return the node result (first output variable value), or null
+     * @return {@link PluginExecutionResult} with outputs, durationMs and success; null if pluginRef blank
      */
     public Object invoke(ExecutionTreeNode node, VariableEngine variableEngine) {
         String pluginRef = node.getPluginRef();
@@ -36,14 +40,15 @@ public final class PluginInvoker {
             pluginInputs.put(m.getPluginParameter(), val != null ? val : "");
         }
         String inputsJson = pluginExecutor.toJson(pluginInputs);
+        long start = System.currentTimeMillis();
         String outputsJson = pluginExecutor.execute(pluginRef, inputsJson);
+        long durationMs = System.currentTimeMillis() - start;
         Map<String, Object> outputs = pluginExecutor.fromJson(outputsJson);
         for (ParameterMapping m : node.getOutputMappings()) {
             Object val = outputs != null ? outputs.get(m.getPluginParameter()) : null;
             variableEngine.put(m.getVariable(), val != null ? val : "");
         }
-        if (node.getOutputMappings().isEmpty()) return null;
-        return variableEngine.get(node.getOutputMappings().get(0).getVariable());
+        return new PluginExecutionResult(outputs != null ? outputs : Map.of(), durationMs, true);
     }
 
     /**

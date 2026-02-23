@@ -30,22 +30,44 @@ public final class LocalContext {
     }
 
     /**
-     * Creates a local context for the given queue by taking a deep copy of the pipeline
+     * Creates a local context for the given tenant and queue by taking a deep copy of the pipeline
      * configuration from the global context. Call this when a new workflow starts.
      *
+     * @param tenantKey tenant id (use {@link com.olo.config.OloConfig#normalizeTenantId(String)} if from workflow context)
      * @param queueName task queue name (e.g. olo-chat-queue-oolama or olo-chat-queue-oolama-debug)
-     * @return local context with a deep copy of the execution tree for that queue, or null if no config is loaded for the queue
+     * @return local context with a deep copy of the execution tree for that queue, or null if no config is loaded for the tenant/queue
      */
-    public static LocalContext forQueue(String queueName) {
+    public static LocalContext forQueue(String tenantKey, String queueName) {
+        return forQueue(tenantKey, queueName, null);
+    }
+
+    /**
+     * Creates a local context for the given tenant, queue and optional config version (execution version pinning).
+     * When {@code configVersion} is non-null and non-blank, the loaded config's version must match; otherwise returns null.
+     *
+     * @param tenantKey    tenant id
+     * @param queueName    task queue name
+     * @param configVersion optional version to pin to (e.g. from routing); null = no version check
+     * @return local context with a deep copy, or null if no config or version mismatch
+     */
+    public static LocalContext forQueue(String tenantKey, String queueName, String configVersion) {
         Objects.requireNonNull(queueName, "queueName");
-        GlobalContext global = GlobalConfigurationContext.get(queueName);
+        String tenant = tenantKey != null && !tenantKey.isBlank() ? tenantKey.trim() : "default";
+        GlobalContext global = GlobalConfigurationContext.get(tenant, queueName);
         if (global == null) {
-            log.warn("No global pipeline configuration for queue={}; cannot create LocalContext", queueName);
+            log.warn("No global pipeline configuration for tenant={} queue={}; cannot create LocalContext", tenant, queueName);
             return null;
         }
         PipelineConfiguration source = global.getConfiguration();
+        if (configVersion != null && !configVersion.isBlank()) {
+            String loadedVersion = source != null ? source.getVersion() : null;
+            if (loadedVersion == null || !loadedVersion.trim().equals(configVersion.trim())) {
+                log.warn("Config version mismatch for tenant={} queue={}: requested={}, loaded={}", tenant, queueName, configVersion, loadedVersion);
+                return null;
+            }
+        }
         PipelineConfiguration deepCopy = deepCopy(source);
-        log.debug("Created LocalContext for queue={} with deep copy of pipeline configuration", queueName);
+        log.debug("Created LocalContext for tenant={} queue={} with deep copy of pipeline configuration", tenant, queueName);
         return new LocalContext(queueName, deepCopy);
     }
 

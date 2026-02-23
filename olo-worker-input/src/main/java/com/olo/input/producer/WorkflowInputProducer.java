@@ -71,7 +71,8 @@ public final class WorkflowInputProducer {
     public WorkflowInputProducer addStringInput(String name, String displayName, String value) {
         String display = displayName != null ? displayName : name;
         if (value != null && value.length() > maxLocalMessageSize) {
-            String key = InputStorageKeys.cacheKey(transactionId, name);
+            String tenantId = context != null ? context.getTenantId() : null;
+            String key = InputStorageKeys.cacheKey(tenantId, transactionId, name);
             cacheWriter.put(key, value);
             Storage storage = new Storage(StorageMode.CACHE, new CacheStorage(CacheProvider.REDIS, key), null);
             inputs.add(new InputItem(name, display, InputType.STRING, storage, null));

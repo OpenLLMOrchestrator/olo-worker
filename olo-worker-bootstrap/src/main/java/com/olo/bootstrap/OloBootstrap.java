@@ -2,20 +2,25 @@ package com.olo.bootstrap;
 
 import com.olo.config.OloConfig;
 import com.olo.config.RedisPipelineConfigSourceSink;
+import com.olo.config.TenantConfigRegistry;
+import com.olo.config.TenantEntry;
 import com.olo.executiontree.config.PipelineConfiguration;
 import com.olo.executiontree.load.GlobalConfigurationContext;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * Bootstrap for the OLO worker: loads configuration from environment and populates
- * the global pipeline configuration context for all configured task queues.
- * Returns a {@link GlobalContext} with in-memory config and queue → pipeline config map.
+ * {@link com.olo.executiontree.load.GlobalConfigurationContext} (runtime config store) for all
+ * configured tenants and task queues. Returns a {@link BootstrapContext} wrapper with
+ * in-memory config and a flattened map of pipeline configs for validation.
  */
 public final class OloBootstrap {
 
@@ -26,13 +31,13 @@ public final class OloBootstrap {
 
     /**
      * Creates configuration from environment, validates task queues, loads pipeline config
-     * for each queue (Redis → DB → file → default; file-loaded config is written back to Redis),
-     * and returns a global context with config and the map of queue → deserialized pipeline config.
+     * per tenant (Redis → DB → file → default; file-loaded config is written back to Redis),
+     * and returns a bootstrap context with config and the map of "tenant:queue" → pipeline config.
      * Exits the JVM with code 1 if no task queues are configured.
      *
-     * @return global context with {@link OloConfig} and map of queue name → {@link PipelineConfiguration}
+     * @return bootstrap context with {@link OloConfig} and map of composite key → {@link PipelineConfiguration}
      */
-    public static GlobalContext initialize() {
+    public static BootstrapContext initialize() {
         log.info("Bootstrap: loading configuration from environment");
         OloConfig config = OloConfig.fromEnvironment();
         List<String> taskQueues = config.getTaskQueues();
@@ -43,20 +48,72 @@ public final class OloBootstrap {
         Path configDir = Path.of(config.getPipelineConfigDir());
         log.info("Bootstrap: configuration loaded from environment; taskQueues={}, configDir={}, version={}, configKeyPrefix={}, retryWaitSeconds={}",
                 taskQueues, configDir.toAbsolutePath(), config.getPipelineConfigVersion(), config.getPipelineConfigKeyPrefix(), config.getPipelineConfigRetryWaitSeconds());
-        log.info("Bootstrap: loading pipeline configuration for each queue (order: Redis → DB → <queue>.json → if -debug queue then <base>.json → default.json)");
+        log.info("Bootstrap: loading pipeline configuration per tenant (order: Redis → DB → <queue>.json → if -debug queue then <base>.json → default.json)");
         RedisPipelineConfigSourceSink configSourceSink = new RedisPipelineConfigSourceSink(config);
-        GlobalConfigurationContext.loadAllQueuesAndPopulateContext(
-                taskQueues,
-                config.getPipelineConfigVersion(),
-                configSourceSink,
-                configSourceSink,
-                configDir,
-                config.getPipelineConfigRetryWaitSeconds(),
-                config.getPipelineConfigKeyPrefix());
-        log.info("Bootstrap: pipeline configuration loaded for all queues: {}", taskQueues);
+        List<String> tenantIds = resolveTenantIds(configSourceSink, config);
+        if (tenantIds.isEmpty()) tenantIds = List.of(OloConfig.normalizeTenantId(null));
+        for (String tenantId : tenantIds) {
+            String tenantScopedPrefix = config.getPipelineConfigKeyPrefix(tenantId);
+            GlobalConfigurationContext.loadAllQueuesAndPopulateContext(
+                    tenantId,
+                    taskQueues,
+                    config.getPipelineConfigVersion(),
+                    configSourceSink,
+                    configSourceSink,
+                    configDir,
+                    config.getPipelineConfigRetryWaitSeconds(),
+                    tenantScopedPrefix);
+        }
+        log.info("Bootstrap: pipeline configuration loaded for tenants={} queues={}", tenantIds, taskQueues);
         Map<String, PipelineConfiguration> pipelineConfigByQueue = new LinkedHashMap<>();
-        GlobalConfigurationContext.getContextByQueue().forEach((queue, ctx) ->
-                pipelineConfigByQueue.put(queue, ctx.getConfiguration()));
-        return new GlobalContext(config, pipelineConfigByQueue);
+        GlobalConfigurationContext.getContextByTenantAndQueue().forEach((tenant, byQueue) ->
+                byQueue.forEach((queue, ctx) ->
+                        pipelineConfigByQueue.put(tenant + ":" + queue, ctx.getConfiguration())));
+        return new BootstrapContext(config, pipelineConfigByQueue, tenantIds);
+    }
+
+    /**
+     * Resolves the list of tenant ids to load config for: Redis key {@link TenantEntry#REDIS_TENANTS_KEY}
+     * (JSON array of {@code {"id":"...","name":"..."}}). If not available or invalid, uses {@link OloConfig#getTenantIds()} from env (OLO_TENANT_IDS).
+     */
+    private static List<String> resolveTenantIds(RedisPipelineConfigSourceSink configSourceSink, OloConfig config) {
+        try {
+            var opt = configSourceSink.getFromCache(TenantEntry.REDIS_TENANTS_KEY);
+            String json = opt.orElse("");
+            List<TenantEntry.TenantEntryWithConfig> entries = TenantEntry.parseTenantEntriesWithConfig(json);
+            if (!entries.isEmpty()) {
+                TenantConfigRegistry registry = TenantConfigRegistry.getInstance();
+                List<String> ids = new ArrayList<>();
+                Set<String> seen = new java.util.LinkedHashSet<>();
+                for (TenantEntry.TenantEntryWithConfig e : entries) {
+                    registry.put(e.getId(), e.getConfig());
+                    if (seen.add(e.getId())) ids.add(e.getId());
+                }
+                log.info("Bootstrap: using tenant list from Redis {} ({} tenant(s), tenant config loaded)", TenantEntry.REDIS_TENANTS_KEY, ids.size());
+                return ids;
+            }
+            List<String> fromRedis = TenantEntry.parseTenantIds(json);
+            if (!fromRedis.isEmpty()) {
+                log.info("Bootstrap: using tenant list from Redis {} ({} tenant(s))", TenantEntry.REDIS_TENANTS_KEY, fromRedis.size());
+                return fromRedis;
+            }
+        } catch (Exception e) {
+            log.debug("Bootstrap: could not read {} from Redis, using OLO_TENANT_IDS: {}", TenantEntry.REDIS_TENANTS_KEY, e.getMessage());
+        }
+        List<String> fromEnv = config.getTenantIds();
+        if (fromEnv.isEmpty()) {
+            fromEnv = List.of(OloConfig.normalizeTenantId(null));
+        }
+        if (!fromEnv.isEmpty()) {
+            log.info("Bootstrap: using tenant list from env OLO_TENANT_IDS: {}", fromEnv);
+            try {
+                String json = TenantEntry.toJsonArray(fromEnv);
+                configSourceSink.putInCache(TenantEntry.REDIS_TENANTS_KEY, json);
+                log.info("Bootstrap: created {} with {} tenant(s) from env (key was missing or empty)", TenantEntry.REDIS_TENANTS_KEY, fromEnv.size());
+            } catch (Exception e) {
+                log.warn("Bootstrap: could not write {} to Redis: {}", TenantEntry.REDIS_TENANTS_KEY, e.getMessage());
+            }
+        }
+        return fromEnv;
     }
 }

@@ -11,26 +11,37 @@ import java.util.Map;
 import java.util.Objects;
 
 /**
- * In-memory global context created at bootstrap: env-derived configuration plus
- * a read-only map of queue name to deserialized pipeline configuration.
+ * Wrapper object returned from bootstrap. Holds env-derived configuration plus
+ * a read-only map of pipeline configs (keyed by "tenant:queue" for validation).
+ * <p>
+ * For the runtime configuration store, see {@link com.olo.executiontree.load.GlobalConfigurationContext}.
  */
-public final class GlobalContext {
+public final class BootstrapContext {
 
     private final OloConfig config;
     private final List<String> taskQueues;
+    private final List<String> tenantIds;
     private final Map<String, PipelineConfiguration> pipelineConfigByQueue;
 
-    public GlobalContext(
+    public BootstrapContext(
             OloConfig config,
-            Map<String, PipelineConfiguration> pipelineConfigByQueue) {
+            Map<String, PipelineConfiguration> pipelineConfigByQueue,
+            List<String> tenantIds) {
         this.config = Objects.requireNonNull(config, "config");
         this.taskQueues = config.getTaskQueues();
+        this.tenantIds = tenantIds != null ? List.copyOf(tenantIds) : List.of();
         this.pipelineConfigByQueue = pipelineConfigByQueue == null
                 ? Collections.emptyMap()
                 : Collections.unmodifiableMap(pipelineConfigByQueue);
     }
 
-    /** Configuration built from environment (OLO_QUEUE, OLO_CACHE_*, etc.). */
+    /** @deprecated Use {@link #BootstrapContext(OloConfig, Map, List)} with tenant ids. */
+    @Deprecated
+    public BootstrapContext(OloConfig config, Map<String, PipelineConfiguration> pipelineConfigByQueue) {
+        this(config, pipelineConfigByQueue, null);
+    }
+
+    /** Configuration built from environment (OLO_QUEUE, OLO_TENANT_IDS, OLO_CACHE_*, etc.). */
     public OloConfig getConfig() {
         return config;
     }
@@ -40,14 +51,19 @@ public final class GlobalContext {
         return taskQueues;
     }
 
-    /** Read-only map: queue name → deserialized pipeline configuration. */
+    /** Tenant ids that were loaded at bootstrap (from Redis olo:tenants or OLO_TENANT_IDS). Use when registering plugins per tenant. */
+    public List<String> getTenantIds() {
+        return tenantIds;
+    }
+
+    /** Read-only map: composite key "tenant:queue" → deserialized pipeline configuration (for validation). */
     public Map<String, PipelineConfiguration> getPipelineConfigByQueue() {
         return pipelineConfigByQueue;
     }
 
-    /** Returns the pipeline configuration for the given queue, or null if not loaded. */
-    public PipelineConfiguration getPipelineConfig(String queueName) {
-        return pipelineConfigByQueue.get(queueName);
+    /** Returns the pipeline configuration for the given composite key, or null if not loaded. */
+    public PipelineConfiguration getPipelineConfig(String key) {
+        return pipelineConfigByQueue.get(key);
     }
 
     /**

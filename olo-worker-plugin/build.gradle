@@ -15,6 +15,8 @@ repositories {
 }
 
 dependencies {
+    implementation project(':olo-annotations')
+    implementation project(':olo-worker-configuration')
     implementation project(':olo-worker-execution-tree')
     implementation 'org.slf4j:slf4j-api:2.0.9'
     testImplementation 'org.junit.jupiter:junit-jupiter:5.10.2'

@@ -51,7 +51,7 @@ class ConfigurationLoaderTest {
         ConfigurationLoader loader = new ConfigurationLoader(
                 EMPTY_SOURCE, configDir, 0, "olo:engine:config");
 
-        Optional<PipelineConfiguration> cfg = loader.tryLoadOnce("any-queue", "1.0");
+        Optional<PipelineConfiguration> cfg = loader.tryLoadOnce("default", "any-queue", "1.0");
 
         assertTrue(cfg.isPresent());
         assertEquals("1.0.0", cfg.get().getVersion());
@@ -65,7 +65,7 @@ class ConfigurationLoaderTest {
         ConfigurationLoader loader = new ConfigurationLoader(
                 EMPTY_SOURCE, configDir, 0, "olo:engine:config");
 
-        PipelineConfiguration config = loader.loadConfiguration("chat-queue-oolama", "1.0");
+        PipelineConfiguration config = loader.loadConfiguration("default", "chat-queue-oolama", "1.0");
 
         assertNotNull(config);
         assertEquals("1.0.0", config.getVersion());
@@ -80,7 +80,7 @@ class ConfigurationLoaderTest {
         ConfigurationLoader loader = new ConfigurationLoader(
                 EMPTY_SOURCE, configDir, 0, "olo:engine:config");
 
-        PipelineConfiguration config = loader.loadConfiguration("my-queue", "1.0");
+        PipelineConfiguration config = loader.loadConfiguration("default", "my-queue", "1.0");
 
         assertNotNull(config);
         assertTrue(config.getPipelines().containsKey("queue-pipeline"));
@@ -95,16 +95,18 @@ class ConfigurationLoaderTest {
         int retrySeconds = 0;
         String prefix = "olo:engine:config";
 
+        String tenant = "default";
         GlobalConfigurationContext.loadAllQueuesAndPopulateContext(
-                queues, version, source, configDir, retrySeconds, prefix);
+                tenant, queues, version, source, configDir, retrySeconds, prefix);
 
-        GlobalContext ctx = GlobalConfigurationContext.get("olo-chat-queue-oolama");
+        GlobalContext ctx = GlobalConfigurationContext.get(tenant, "olo-chat-queue-oolama");
         assertNotNull(ctx);
         assertEquals("olo-chat-queue-oolama", ctx.getQueueName());
         PipelineConfiguration cfg = ctx.getConfiguration();
         assertNotNull(cfg);
         assertEquals("1.0.0", cfg.getVersion());
-        assertTrue(GlobalConfigurationContext.getContextByQueue().containsKey("olo-chat-queue-oolama"));
+        assertTrue(GlobalConfigurationContext.getContextByTenantAndQueue().containsKey(tenant));
+        assertTrue(GlobalConfigurationContext.getContextByTenantAndQueue().get(tenant).containsKey("olo-chat-queue-oolama"));
     }
 
     @Test
@@ -132,7 +134,7 @@ class ConfigurationLoaderTest {
         ConfigurationLoader loader = new ConfigurationLoader(
                 EMPTY_SOURCE, sink, configDir, 0, "olo:engine:config");
 
-        PipelineConfiguration config = loader.loadConfiguration("some-queue", "1.0");
+        PipelineConfiguration config = loader.loadConfiguration("default", "some-queue", "1.0");
 
         assertNotNull(config);
         assertEquals("olo:engine:config:some-queue:1.0", cacheKey.get());
@@ -161,7 +163,7 @@ class ConfigurationLoaderTest {
             public void putInDb(String queueName, String version, String json) {}
         };
         ConfigurationLoader loader = new ConfigurationLoader(EMPTY_SOURCE, sink, configDir, 0, "olo:engine:config");
-        PipelineConfiguration config = loader.loadConfiguration("q", "1.0");
+        PipelineConfiguration config = loader.loadConfiguration("default", "q", "1.0");
         assertNotNull(config);
         assertNotNull(writtenJson.get());
         // Root node had no id; after normalize it must have an id (UUID format)

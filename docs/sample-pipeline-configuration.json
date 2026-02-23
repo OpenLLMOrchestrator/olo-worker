@@ -58,7 +58,8 @@
           }
         ],
         "features": [
-          { "id": "debug", "displayName": "Debug", "contractVersion": "1.0" }
+          { "id": "debug", "displayName": "Debug", "contractVersion": "1.0" },
+          { "id": "metrics", "displayName": "Metrics", "contractVersion": "1.0" }
         ]
       },
       "executionTree": {

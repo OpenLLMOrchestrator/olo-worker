@@ -24,4 +24,17 @@ public interface ConfigSink {
      * @param json      pipeline configuration JSON
      */
     void putInDb(String queueName, String version, String json);
+
+    /**
+     * Writes configuration JSON to the database for the given tenant, queue and version.
+     * Tables should include tenant_id for multi-tenant separation.
+     *
+     * @param tenantId  tenant id
+     * @param queueName task queue name
+     * @param version   config version (e.g. 1.0)
+     * @param json      pipeline configuration JSON
+     */
+    default void putInDb(String tenantId, String queueName, String version, String json) {
+        putInDb(queueName, version, json);
+    }
 }

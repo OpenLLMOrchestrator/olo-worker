@@ -1,10 +1,12 @@
 package com.olo.worker.engine;
 
+import com.olo.executioncontext.ExecutionConfigSnapshot;
 import com.olo.executiontree.config.ExecutionType;
 import com.olo.executiontree.config.PipelineConfiguration;
 import com.olo.executiontree.config.PipelineDefinition;
 import com.olo.executiontree.tree.ExecutionTreeNode;
 
+import java.util.Collections;
 import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.ExecutorService;
@@ -14,25 +16,46 @@ import java.util.concurrent.TimeUnit;
 /**
  * Execution engine: orchestrates VariableEngine, FeatureResolver, NodeExecutor, PluginInvoker, ResultMapper.
  * Single entry point to run the execution tree for a pipeline.
+ * Prefer {@link #run(ExecutionConfigSnapshot, Map, PluginInvoker.PluginExecutor, Map)} for immutable snapshot and version pinning.
  */
 public final class ExecutionEngine {
 
     /**
-     * Runs the execution tree using config and entry pipeline name (enables SUB_PIPELINE).
+     * Runs the execution tree using an immutable config snapshot (no global config reads during run).
      *
-     * @param config         full pipeline configuration (used for SUB_PIPELINE resolution)
-     * @param entryPipelineName name of the pipeline to run (key in config.getPipelines()); if null or missing, first pipeline is used
-     * @param queueName      task queue name (for feature resolution, e.g. -debug)
-     * @param inputValues    workflow input name to value (IN variables)
-     * @param pluginExecutor plugin invoker (e.g. activity::executePlugin + JSON)
+     * @param snapshot         immutable snapshot (tenant, queue, config, version id)
+     * @param inputValues      workflow input name to value (IN variables)
+     * @param pluginExecutor   plugin invoker
+     * @param tenantConfigMap  tenant-specific config map; may be null or empty
      * @return workflow result string from ResultMapper
      */
+    public static String run(
+            ExecutionConfigSnapshot snapshot,
+            Map<String, Object> inputValues,
+            PluginInvoker.PluginExecutor pluginExecutor,
+            Map<String, Object> tenantConfigMap) {
+        Objects.requireNonNull(snapshot, "snapshot");
+        return run(
+                snapshot.getPipelineConfiguration(),
+                null,
+                snapshot.getQueueName(),
+                inputValues,
+                pluginExecutor,
+                snapshot.getTenantId(),
+                tenantConfigMap,
+                snapshot.getRunId());
+    }
+
+    /** Internal: run with optional ledger run id so the executor thread can set LedgerContext (for olo_run_node when ASYNC). */
     public static String run(
             PipelineConfiguration config,
             String entryPipelineName,
             String queueName,
             Map<String, Object> inputValues,
-            PluginInvoker.PluginExecutor pluginExecutor) {
+            PluginInvoker.PluginExecutor pluginExecutor,
+            String tenantId,
+            Map<String, Object> tenantConfigMap,
+            String ledgerRunId) {
         Objects.requireNonNull(config, "config");
         Objects.requireNonNull(pluginExecutor, "pluginExecutor");
         Map<String, PipelineDefinition> pipelines = config.getPipelines();
@@ -50,7 +73,7 @@ public final class ExecutionEngine {
                 ? Executors.newCachedThreadPool()
                 : null;
         try {
-            NodeExecutor nodeExecutor = new NodeExecutor(pluginInvoker, config, executionType, executor);
+            NodeExecutor nodeExecutor = new NodeExecutor(pluginInvoker, config, executionType, executor, tenantId, tenantConfigMap, ledgerRunId);
             ExecutionTreeNode root = pipeline.getExecutionTree();
             if (root != null) {
                 nodeExecutor.executeNode(root, pipeline, variableEngine, queueName != null ? queueName : "");
@@ -74,17 +97,21 @@ public final class ExecutionEngine {
     /**
      * Runs the execution tree for a single pipeline (SUB_PIPELINE nodes will no-op when no config is available).
      *
-     * @param pipeline       pipeline definition (variableRegistry, inputContract, scope, executionTree, resultMapping)
-     * @param queueName      task queue name (for feature resolution, e.g. -debug)
-     * @param inputValues    workflow input name to value (IN variables)
-     * @param pluginExecutor plugin invoker (e.g. activity::executePlugin + JSON)
+     * @param pipeline        pipeline definition
+     * @param queueName       task queue name (for feature resolution, e.g. -debug)
+     * @param inputValues     workflow input name to value (IN variables)
+     * @param pluginExecutor  plugin invoker (e.g. activity::executePlugin + JSON)
+     * @param tenantId        tenant id (for feature context); may be null
+     * @param tenantConfigMap tenant-specific config map; may be null or empty
      * @return workflow result string from ResultMapper
      */
     public static String run(
             PipelineDefinition pipeline,
             String queueName,
             Map<String, Object> inputValues,
-            PluginInvoker.PluginExecutor pluginExecutor) {
+            PluginInvoker.PluginExecutor pluginExecutor,
+            String tenantId,
+            Map<String, Object> tenantConfigMap) {
         Objects.requireNonNull(pipeline, "pipeline");
         Objects.requireNonNull(pluginExecutor, "pluginExecutor");
         VariableEngine variableEngine = new VariableEngine(pipeline, inputValues);
@@ -94,7 +121,7 @@ public final class ExecutionEngine {
                 ? Executors.newCachedThreadPool()
                 : null;
         try {
-            NodeExecutor nodeExecutor = new NodeExecutor(pluginInvoker, null, executionType, executor);
+            NodeExecutor nodeExecutor = new NodeExecutor(pluginInvoker, null, executionType, executor, tenantId, tenantConfigMap);
             ExecutionTreeNode root = pipeline.getExecutionTree();
             if (root != null) {
                 nodeExecutor.executeNode(root, pipeline, variableEngine, queueName != null ? queueName : "");

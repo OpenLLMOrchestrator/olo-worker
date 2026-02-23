@@ -56,4 +56,10 @@ public final class RedisPipelineConfigSourceSink implements ConfigSource, Config
         // No-op unless DB persistence is added later
         log.trace("putInDb not implemented: queue={} version={}", queueName, version);
     }
+
+    @Override
+    public void putInDb(String tenantId, String queueName, String version, String json) {
+        // No-op unless DB persistence with tenant_id is added later
+        log.trace("putInDb not implemented: tenant={} queue={} version={}", tenantId, queueName, version);
+    }
 }

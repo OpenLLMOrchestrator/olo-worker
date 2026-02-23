@@ -3,6 +3,8 @@ package com.olo.plugin.ollama;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.olo.annotations.OloPlugin;
 import com.olo.annotations.OloPluginParam;
+import com.olo.annotations.ResourceCleanup;
+import com.olo.config.TenantConfig;
 import com.olo.plugin.ModelExecutorPlugin;
 import com.olo.plugin.PluginRegistry;
 
@@ -33,10 +35,14 @@ import java.util.Objects;
         inputParameters = { @OloPluginParam(name = "prompt", type = "STRING", required = true) },
         outputParameters = { @OloPluginParam(name = "responseText", type = "STRING", required = false) }
 )
-public final class OllamaModelExecutorPlugin implements ModelExecutorPlugin {
+public final class OllamaModelExecutorPlugin implements ModelExecutorPlugin, ResourceCleanup {
 
     private static final String INPUT_PROMPT = "prompt";
     private static final String OUTPUT_RESPONSE_TEXT = "responseText";
+    /** Output keys for metrics (used by MetricsFeature). */
+    public static final String OUTPUT_PROMPT_TOKENS = "promptTokens";
+    public static final String OUTPUT_COMPLETION_TOKENS = "completionTokens";
+    public static final String OUTPUT_MODEL = "modelId";
 
     private static final ObjectMapper MAPPER = new ObjectMapper();
 
@@ -63,20 +69,46 @@ public final class OllamaModelExecutorPlugin implements ModelExecutorPlugin {
     }
 
     @Override
-    public Map<String, Object> execute(Map<String, Object> inputs) throws Exception {
+    public void onExit() {
+        // HttpClient is not AutoCloseable in Java 17; on Java 21+ you may close it here to release resources
+    }
+
+    @Override
+    public Map<String, Object> execute(Map<String, Object> inputs, TenantConfig tenantConfig) throws Exception {
         Object promptObj = inputs == null ? null : inputs.get(INPUT_PROMPT);
         String prompt = promptObj != null ? Objects.toString(promptObj).trim() : "";
-        String responseText = callOllamaChat(prompt);
+        String effectiveBaseUrl = tenantConfig != null && tenantConfig.get("ollamaBaseUrl") != null
+                ? Objects.toString(tenantConfig.get("ollamaBaseUrl")).trim() : baseUrl;
+        String effectiveModel = tenantConfig != null && tenantConfig.get("ollamaModel") != null
+                ? Objects.toString(tenantConfig.get("ollamaModel")).trim() : model;
+        ChatResult result = callOllamaChat(prompt, effectiveBaseUrl, effectiveModel);
         Map<String, Object> out = new HashMap<>();
-        out.put(OUTPUT_RESPONSE_TEXT, responseText);
+        out.put(OUTPUT_RESPONSE_TEXT, result.content != null ? result.content : "");
+        out.put(OUTPUT_PROMPT_TOKENS, result.promptTokens);
+        out.put(OUTPUT_COMPLETION_TOKENS, result.completionTokens);
+        out.put(OUTPUT_MODEL, result.model != null ? result.model : effectiveModel);
         return out;
     }
 
-    private String callOllamaChat(String prompt) throws Exception {
+    private static final class ChatResult {
+        final String content;
+        final long promptTokens;
+        final long completionTokens;
+        final String model;
+
+        ChatResult(String content, long promptTokens, long completionTokens, String model) {
+            this.content = content;
+            this.promptTokens = promptTokens;
+            this.completionTokens = completionTokens;
+            this.model = model;
+        }
+    }
+
+    private ChatResult callOllamaChat(String prompt, String effectiveBaseUrl, String effectiveModel) throws Exception {
         OllamaChatRequest.Message msg = new OllamaChatRequest.Message("user", prompt);
-        OllamaChatRequest req = new OllamaChatRequest(model, List.of(msg), false);
+        OllamaChatRequest req = new OllamaChatRequest(effectiveModel, List.of(msg), false);
         String json = MAPPER.writeValueAsString(req);
-        URI uri = URI.create(baseUrl + "/api/chat");
+        URI uri = URI.create(effectiveBaseUrl + "/api/chat");
         HttpRequest request = HttpRequest.newBuilder(uri)
                 .header("Content-Type", "application/json")
                 .timeout(Duration.ofSeconds(120))
@@ -86,23 +118,53 @@ public final class OllamaModelExecutorPlugin implements ModelExecutorPlugin {
         if (response.statusCode() != 200) {
             throw new RuntimeException("Ollama API error: " + response.statusCode() + " " + response.body());
         }
-        OllamaChatResponse resp = MAPPER.readValue(response.body(), OllamaChatResponse.class);
-        return resp.getMessage() != null && resp.getMessage().getContent() != null
-                ? resp.getMessage().getContent() : "";
+        String body = response.body();
+        OllamaChatResponse resp = MAPPER.readValue(body, OllamaChatResponse.class);
+        String content = null;
+        long promptTokens = 0;
+        long completionTokens = 0;
+        String model = effectiveModel;
+        if (resp != null) {
+            if (resp.getMessage() != null) content = resp.getMessage().getContent();
+            if (resp.getPrompt_eval_count() != null) promptTokens = resp.getPrompt_eval_count();
+            if (resp.getEval_count() != null) completionTokens = resp.getEval_count();
+            if (resp.getModel() != null && !resp.getModel().isBlank()) model = resp.getModel();
+        }
+        if (content == null && body != null && !body.isBlank()) {
+            com.fasterxml.jackson.databind.JsonNode root = MAPPER.readTree(body);
+            com.fasterxml.jackson.databind.JsonNode messageNode = root.path("message");
+            if (!messageNode.isMissingNode()) {
+                com.fasterxml.jackson.databind.JsonNode c = messageNode.path("content");
+                if (!c.isMissingNode() && !c.isNull()) content = c.asText();
+            }
+        }
+        return new ChatResult(content != null ? content : "", promptTokens, completionTokens, model);
     }
 
     /**
-     * Registers this plugin with {@link PluginRegistry} under the given id.
-     * Call once at worker startup (e.g. from bootstrap).
+     * Registers this plugin with {@link PluginRegistry} for the default tenant under the given id.
+     * For multi-tenant, use {@link #register(String, String)} or register per tenant at startup.
      *
      * @param pluginId id to register under (e.g. "GPT4_EXECUTOR" to match pipeline scope)
      */
     public void register(String pluginId) {
-        PluginRegistry.getInstance().registerModelExecutor(pluginId, this);
+        register("default", pluginId);
     }
 
     /**
-     * Convenience: create an Ollama plugin and register it under the given id.
+     * Registers this plugin with {@link PluginRegistry} for the given tenant under the given id.
+     * Call once per tenant at worker startup (e.g. from bootstrap).
+     *
+     * @param tenantId tenant id (e.g. from OLO_TENANT_IDS or olo:tenants)
+     * @param pluginId id to register under (e.g. "GPT4_EXECUTOR")
+     */
+    public void register(String tenantId, String pluginId) {
+        PluginRegistry.getInstance().registerModelExecutor(tenantId, pluginId, this);
+    }
+
+    /**
+     * Convenience: create an Ollama plugin and register it for the default tenant under the given id.
+     * For multi-tenant, create the plugin and call {@link #register(String, String)} for each tenant.
      *
      * @param pluginId plugin id (e.g. "GPT4_EXECUTOR")
      * @param baseUrl  Ollama base URL (e.g. "http://localhost:11434"); null for default

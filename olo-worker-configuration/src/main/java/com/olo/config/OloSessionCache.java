@@ -37,18 +37,50 @@ public final class OloSessionCache {
     }
 
     /**
+     * Increments the tenant's active workflow count in Redis (key {@code <tenantId>:olo:quota:activeWorkflows}).
+     * Call when starting a workflow run; pair with {@link #decrActiveWorkflows(String)} in a finally block when the run ends.
+     */
+    public void incrActiveWorkflows(String tenantId) {
+        String key = config.getActiveWorkflowsQuotaKey(tenantId);
+        redisWriter.incr(key);
+        log.debug("Active workflows +1 for tenant={} (key={})", tenantId, key);
+    }
+
+    /**
+     * Decrements the tenant's active workflow count in Redis (key {@code <tenantId>:olo:quota:activeWorkflows}).
+     * Call when a workflow run ends (success or failure).
+     */
+    public void decrActiveWorkflows(String tenantId) {
+        String key = config.getActiveWorkflowsQuotaKey(tenantId);
+        redisWriter.decr(key);
+        log.debug("Active workflows -1 for tenant={} (key={})", tenantId, key);
+    }
+
+    /**
+     * Returns the current active workflow count for the tenant (Redis GET on {@code <tenantId>:olo:quota:activeWorkflows}).
+     * Used by quota feature to compare with soft/hard limits. Returns 0 if key is missing or not a number.
+     */
+    public long getActiveWorkflowsCount(String tenantId) {
+        String key = config.getActiveWorkflowsQuotaKey(tenantId);
+        return redisWriter.getLong(key);
+    }
+
+    /**
      * Serializes the workflow input (excluding null fields from JSON) and pushes it to Redis at the session USERINPUT key.
+     * Key is tenant-scoped: &lt;tenantId&gt;:olo:kernel:sessions:&lt;transactionId&gt;:USERINPUT.
      * Call this during the initialize phase.
      *
      * @param input workflow input (version, inputs, context, routing, metadata)
      */
     public void cacheUpdate(WorkflowInput input) {
         Objects.requireNonNull(input, "input");
+        String tenantId = OloConfig.normalizeTenantId(
+                input.getContext() != null ? input.getContext().getTenantId() : null);
         String transactionId = input.getRouting() != null ? input.getRouting().getTransactionId() : null;
-        String key = SessionUserInputStorage.userInputKey(config.getSessionDataPrefix(), transactionId);
+        String key = SessionUserInputStorage.userInputKey(config.getSessionDataPrefix(tenantId), transactionId);
         String value = toJsonExcludingNulls(input);
         redisWriter.put(key, value);
-        log.debug("Cache update: session USERINPUT for transactionId={}", transactionId);
+        log.debug("Cache update: session USERINPUT for tenant={} transactionId={}", tenantId, transactionId);
     }
 
     private static String toJsonExcludingNulls(WorkflowInput input) {

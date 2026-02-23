@@ -29,4 +29,37 @@ final class RedisCacheWriter implements CacheWriter {
             jedis.set(key, value);
         }
     }
+
+    /**
+     * Gets the current value of a key (e.g. for active workflow count). Returns 0 if key is missing or not a number.
+     */
+    public long getLong(String key) {
+        try (var jedis = pool.getResource()) {
+            String v = jedis.get(key);
+            if (v == null || v.isBlank()) return 0L;
+            try {
+                return Long.parseLong(v.trim());
+            } catch (NumberFormatException e) {
+                return 0L;
+            }
+        }
+    }
+
+    /**
+     * Increments the Redis key (e.g. for active workflow quota). Key is created with value 0 if missing before INCR.
+     */
+    public long incr(String key) {
+        try (var jedis = pool.getResource()) {
+            return jedis.incr(key);
+        }
+    }
+
+    /**
+     * Decrements the Redis key (e.g. for active workflow quota).
+     */
+    public long decr(String key) {
+        try (var jedis = pool.getResource()) {
+            return jedis.decr(key);
+        }
+    }
 }

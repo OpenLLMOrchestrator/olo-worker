@@ -68,24 +68,26 @@ public final class ConfigurationLoader {
     }
 
     /**
-     * Loads configuration for the given queue and version. Tries Redis → DB → queueName.json → (if queue ends with "-debug") baseQueue.json → default.json.
+     * Loads configuration for the given tenant, queue and version. Tries Redis → DB → queueName.json → (if queue ends with "-debug") baseQueue.json → default.json.
      * If none available, waits retryWaitSeconds and retries until a valid configuration is found.
+     * Redis key uses tenant-scoped prefix (olo:&lt;tenantId&gt;:...); DB lookup uses tenant_id.
      *
-     * @param queueName task queue name (e.g. olo-chat-queue-oolama or olo-chat-queue-oolama-debug); used for Redis key, DB lookup, and file name
-     * @param version  config version (e.g. 1.0)
+     * @param tenantKey tenant id (for Redis key prefix and DB)
+     * @param queueName task queue name (e.g. olo-chat-queue-oolama or olo-chat-queue-oolama-debug)
+     * @param version   config version (e.g. 1.0)
      * @return valid pipeline configuration (never null)
      */
-    public PipelineConfiguration loadConfiguration(String queueName, String version) {
+    public PipelineConfiguration loadConfiguration(String tenantKey, String queueName, String version) {
         AtomicReference<PipelineConfiguration> ref = new AtomicReference<>();
         while (ref.get() == null) {
-            Optional<PipelineConfiguration> cfg = tryLoadOnce(queueName, version);
+            Optional<PipelineConfiguration> cfg = tryLoadOnce(tenantKey, queueName, version);
             if (cfg.isPresent()) {
                 ref.set(cfg.get());
                 break;
             }
             if (retryWaitSeconds > 0) {
-                log.warn("No pipeline configuration found for queue={} version={}; retrying in {}s",
-                        queueName, version, retryWaitSeconds);
+                log.warn("No pipeline configuration found for tenant={} queue={} version={}; retrying in {}s",
+                        tenantKey, queueName, version, retryWaitSeconds);
                 try {
                     Thread.sleep(retryWaitSeconds * 1000L);
                 } catch (InterruptedException e) {
@@ -94,7 +96,7 @@ public final class ConfigurationLoader {
                 }
             } else {
                 throw new IllegalStateException(
-                        "No pipeline configuration found for queue=" + queueName + " version=" + version
+                        "No pipeline configuration found for tenant=" + tenantKey + " queue=" + queueName + " version=" + version
                                 + " (Redis, DB, local file, default). Configure at least one source or set retry.");
             }
         }
@@ -104,7 +106,7 @@ public final class ConfigurationLoader {
     /**
      * One attempt: Redis → DB → queueName.json → (if -debug queue) baseQueue.json → default.json. Returns empty if none found or parse failed.
      */
-    public Optional<PipelineConfiguration> tryLoadOnce(String queueName, String version) {
+    public Optional<PipelineConfiguration> tryLoadOnce(String tenantKey, String queueName, String version) {
         String redisKey = keyBuilder.redisKey(queueName, version);
 
         Optional<String> json = configSource.getFromCache(redisKey);
@@ -114,35 +116,35 @@ public final class ConfigurationLoader {
                 PipelineConfiguration normalized = ExecutionTreeConfig.ensureUniqueNodeIds(cfg.get());
                 log.info("Pipeline configuration loaded from Redis key={} for queue={} version={}", redisKey, queueName, version);
                 if (configSink != null) {
-                    persistConfig(queueName, version, redisKey, normalized, "Redis");
+                    persistConfig(tenantKey, queueName, version, redisKey, normalized, "Redis");
                 }
                 return Optional.of(normalized);
             }
         }
 
-        json = configSource.getFromDb(queueName, version);
+        json = configSource.getFromDb(tenantKey, queueName, version);
         if (json.isPresent()) {
             Optional<PipelineConfiguration> cfg = parseConfig(json.get(), "DB:" + queueName + ":" + version);
             if (cfg.isPresent()) {
                 PipelineConfiguration normalized = ExecutionTreeConfig.ensureUniqueNodeIds(cfg.get());
-                log.info("Pipeline configuration loaded from DB queue={} version={}", queueName, version);
+                log.info("Pipeline configuration loaded from DB tenant={} queue={} version={}", tenantKey, queueName, version);
                 if (configSink != null) {
-                    persistConfig(queueName, version, redisKey, normalized, "DB");
+                    persistConfig(tenantKey, queueName, version, redisKey, normalized, "DB");
                 }
                 return Optional.of(normalized);
             }
         }
 
-        Optional<PipelineConfiguration> cfg = tryLoadFromLocalFile(queueName + ".json", queueName, version, redisKey, "");
+        Optional<PipelineConfiguration> cfg = tryLoadFromLocalFile(tenantKey, queueName + ".json", queueName, version, redisKey, "");
         if (cfg.isPresent()) return cfg;
 
         if (queueName.endsWith(DEBUG_QUEUE_SUFFIX)) {
             String baseQueue = queueName.substring(0, queueName.length() - DEBUG_QUEUE_SUFFIX.length());
-            cfg = tryLoadFromLocalFile(baseQueue + ".json", queueName, version, redisKey, " (base queue file for -debug)");
+            cfg = tryLoadFromLocalFile(tenantKey, baseQueue + ".json", queueName, version, redisKey, " (base queue file for -debug)");
             if (cfg.isPresent()) return cfg;
         }
 
-        cfg = tryLoadFromLocalFile(DEFAULT_CONFIG_FILE, queueName, version, redisKey, " (default)");
+        cfg = tryLoadFromLocalFile(tenantKey, DEFAULT_CONFIG_FILE, queueName, version, redisKey, " (default)");
         if (cfg.isPresent()) return cfg;
 
         return Optional.empty();
@@ -150,47 +152,29 @@ public final class ConfigurationLoader {
 
     /**
      * Tries to load config from a single local file. If found and valid, logs and optionally persists to Redis/DB.
-     *
-     * @param fileName   filename (e.g. olo-chat-queue-oolama.json or default.json)
-     * @param queueName  queue name (for logging and persist key)
-     * @param version    config version
-     * @param redisKey   Redis key to persist under
-     * @param logSuffix  suffix for log line (e.g. "" or " (default)" or " (base queue file for -debug)")
      */
-    private Optional<PipelineConfiguration> tryLoadFromLocalFile(String fileName, String queueName, String version, String redisKey, String logSuffix) {
+    private Optional<PipelineConfiguration> tryLoadFromLocalFile(String tenantKey, String fileName, String queueName, String version, String redisKey, String logSuffix) {
         Optional<String> json = readLocalFile(fileName);
         if (json.isEmpty()) return Optional.empty();
         Optional<PipelineConfiguration> cfg = parseConfig(json.get(), "file:" + fileName);
         if (cfg.isEmpty()) return Optional.empty();
         PipelineConfiguration normalized = ExecutionTreeConfig.ensureUniqueNodeIds(cfg.get());
         Path filePath = configDir != null ? configDir.resolve(fileName) : Path.of(fileName);
-        log.info("Pipeline configuration loaded from file: {}{} for queue={} version={}", filePath, logSuffix, queueName, version);
+        log.info("Pipeline configuration loaded from file: {}{} for tenant={} queue={} version={}", filePath, logSuffix, tenantKey, queueName, version);
         if (configSink != null) {
-            persistConfig(queueName, version, redisKey, normalized, "file:" + filePath);
+            persistConfig(tenantKey, queueName, version, redisKey, normalized, "file:" + filePath);
         }
         return Optional.of(normalized);
     }
 
-    private void persistConfig(String queueName, String version, String redisKey, PipelineConfiguration config, String source) {
+    private void persistConfig(String tenantKey, String queueName, String version, String redisKey, PipelineConfiguration config, String source) {
         try {
             String json = ExecutionTreeConfig.toJson(config);
             configSink.putInCache(redisKey, json);
-            configSink.putInDb(queueName, version, json);
-            log.info("Pipeline configuration (with unique node ids) persisted to Redis key={} and DB for queue={} version={} (source: {})", redisKey, queueName, version, source);
+            configSink.putInDb(tenantKey, queueName, version, json);
+            log.info("Pipeline configuration (with unique node ids) persisted to Redis key={} and DB for tenant={} queue={} version={} (source: {})", redisKey, tenantKey, queueName, version, source);
         } catch (Exception e) {
-            log.warn("Failed to persist config to Redis/DB for queue={} version={}: {}", queueName, version, e.getMessage());
-        }
-    }
-
-    /** Writes normalized config (with unique node ids) to Redis and DB so stored copy always has UUIDs where missing. */
-    private void persistNormalizedConfig(String queueName, String version, String redisKey, PipelineConfiguration normalized, String source) {
-        try {
-            String json = ExecutionTreeConfig.toJson(normalized);
-            configSink.putInCache(redisKey, json);
-            configSink.putInDb(queueName, version, json);
-            log.info("Pipeline configuration from {} had node ids ensured; persisted to Redis key={} and DB for queue={} version={}", source, redisKey, queueName, version);
-        } catch (Exception e) {
-            log.warn("Failed to persist normalized config to Redis/DB for queue={} version={}: {}", queueName, version, e.getMessage());
+            log.warn("Failed to persist config to Redis/DB for tenant={} queue={} version={}: {}", tenantKey, queueName, version, e.getMessage());
         }
     }
 

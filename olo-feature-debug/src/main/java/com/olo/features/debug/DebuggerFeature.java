@@ -2,6 +2,7 @@ package com.olo.features.debug;
 
 import com.olo.annotations.FeaturePhase;
 import com.olo.annotations.OloFeature;
+import com.olo.annotations.ResourceCleanup;
 import com.olo.features.FeatureRegistry;
 import com.olo.features.NodeExecutionContext;
 import com.olo.features.PostNodeCall;
@@ -15,7 +16,7 @@ import org.slf4j.LoggerFactory;
  * Register with {@link FeatureRegistry#getInstance()}.register(new DebuggerFeature()).
  */
 @OloFeature(name = "debug", phase = FeaturePhase.PRE_FINALLY, applicableNodeTypes = { "*" })
-public final class DebuggerFeature implements PreNodeCall, PostNodeCall {
+public final class DebuggerFeature implements PreNodeCall, PostNodeCall, ResourceCleanup {
 
     private static final Logger log = LoggerFactory.getLogger(DebuggerFeature.class);
 
@@ -27,5 +28,10 @@ public final class DebuggerFeature implements PreNodeCall, PostNodeCall {
     @Override
     public void after(NodeExecutionContext context, Object nodeResult) {
         log.info("[DEBUG] post nodeId={} type={} nodeType={} resultPresent={}", context.getNodeId(), context.getType(), context.getNodeType(), nodeResult != null);
+    }
+
+    @Override
+    public void onExit() {
+        // No resources to release
     }
 }

@@ -43,10 +43,15 @@ public final class ConfigCompatibilityValidator {
     }
 
     /**
-     * Validates the pipeline configuration. Returns a result with errors if any check fails.
+     * Validates the pipeline configuration for the given tenant. Returns a result with errors if any check fails.
+     * Plugin resolution is tenant-scoped via {@link PluginRegistry#get(String, String)}.
+     *
+     * @param tenantId tenant id for plugin lookup (null treated as "default")
+     * @param config   pipeline configuration to validate
      */
-    public ValidationResult validate(PipelineConfiguration config) {
+    public ValidationResult validate(String tenantId, PipelineConfiguration config) {
         List<String> errors = new ArrayList<>();
+        String tenant = tenantId != null && !tenantId.isBlank() ? tenantId.trim() : "default";
 
         if (config == null) {
             errors.add("Config is null");
@@ -80,7 +85,7 @@ public final class ConfigCompatibilityValidator {
             Scope scope = def.getScope();
             if (scope == null) continue;
 
-            // Plugin contract versions
+            // Plugin contract versions (tenant-scoped)
             if (pluginRegistry != null && scope.getPlugins() != null) {
                 for (PluginDef pluginDef : scope.getPlugins()) {
                     if (pluginDef == null) continue;
@@ -88,10 +93,10 @@ public final class ConfigCompatibilityValidator {
                     if (pluginId == null || pluginId.isBlank()) continue;
                     String expectedVersion = pluginDef.getContractVersion();
                     if (expectedVersion == null || expectedVersion.isBlank()) continue; // config does not require a version
-                    String actualVersion = pluginRegistry.getContractVersion(pluginId);
+                    String actualVersion = pluginRegistry.getContractVersion(tenant, pluginId);
                     if (actualVersion == null) {
-                        if (pluginRegistry.get(pluginId) == null) {
-                            errors.add("Pipeline " + pipelineName + ": plugin " + pluginId + " not registered");
+                        if (pluginRegistry.get(tenant, pluginId) == null) {
+                            errors.add("Pipeline " + pipelineName + ": plugin " + pluginId + " not registered for tenant " + tenant);
                         } else {
                             errors.add("Pipeline " + pipelineName + ": plugin " + pluginId + " has no contract version (config expects " + expectedVersion + ")");
                         }
@@ -127,13 +132,18 @@ public final class ConfigCompatibilityValidator {
     }
 
     /**
-     * Validates and throws ConfigIncompatibleException if invalid.
+     * Validates for the given tenant and throws ConfigIncompatibleException if invalid.
      */
-    public void validateOrThrow(PipelineConfiguration config) {
-        ValidationResult result = validate(config);
+    public void validateOrThrow(String tenantId, PipelineConfiguration config) {
+        ValidationResult result = validate(tenantId, config);
         if (!result.isValid()) {
             throw new ConfigIncompatibleException(result);
         }
+    }
+
+    /** Validates (using default tenant for plugin lookup) and throws if invalid. */
+    public void validateOrThrow(PipelineConfiguration config) {
+        validateOrThrow("default", config);
     }
 
     /** Simple version compare: 1.0 vs 1.0 = 0, 2.0 vs 1.0 = 1, 1.0 vs 2.0 = -1. "x" suffix treated as high (e.g. 2.x >= 2.0). */

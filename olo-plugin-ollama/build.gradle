@@ -16,6 +16,7 @@ repositories {
 
 dependencies {
     implementation project(':olo-annotations')
+    implementation project(':olo-worker-configuration')
     implementation project(':olo-worker-plugin')
     annotationProcessor project(':olo-annotations')
     implementation 'com.fasterxml.jackson.core:jackson-databind:2.16.1'

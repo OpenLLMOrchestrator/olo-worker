@@ -26,19 +26,20 @@ public final class VersionedConfigSupport {
 
     /**
      * Validates the pipeline configuration (config version, plugin contract version, feature contract version)
-     * and, if valid, puts it into the global context for the given queue. Use this whenever configuration
-     * is updated (e.g. reload, admin API) so version checks run before the new config is used.
+     * and, if valid, puts it into the global context for the given tenant and queue. Use this whenever
+     * configuration is updated (e.g. reload, admin API) so version checks run before the new config is used.
      *
+     * @param tenantKey tenant id (use {@link com.olo.config.OloConfig#normalizeTenantId(String)} if from context)
      * @param queueName task queue name
      * @param config    pipeline configuration to validate and store
      * @throws ConfigIncompatibleException if validation fails (config is not put)
      */
-    public static void validateAndPut(String queueName, PipelineConfiguration config) {
+    public static void validateAndPut(String tenantKey, String queueName, PipelineConfiguration config) {
         ConfigCompatibilityValidator validator = new ConfigCompatibilityValidator(
                 null, null,
                 PluginRegistry.getInstance(),
                 FeatureRegistry.getInstance());
-        validator.validateOrThrow(config);
-        GlobalConfigurationContext.put(queueName, config);
+        validator.validateOrThrow(tenantKey, config);
+        GlobalConfigurationContext.put(tenantKey, queueName, config);
     }
 }

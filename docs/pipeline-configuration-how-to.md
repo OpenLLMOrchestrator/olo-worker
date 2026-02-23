@@ -144,15 +144,14 @@ PipelineDefinition p = ExecutionTreeConfig.pipelineFromJson(pipelineJson);
 String pipelineJson = ExecutionTreeConfig.toJson(pipeline);
 ```
 
-## Loading configuration (loadConfiguration) and global context
+## Loading configuration and runtime config store
 
-The **olo-worker-execution-tree** module provides a load cycle and a global context map:
+The **olo-worker-execution-tree** module provides a load cycle and **GlobalConfigurationContext** (runtime configuration store: Map of tenant → (queue → per-queue config)). **BootstrapContext** is the wrapper returned from `OloBootstrap.initialize()` (OloConfig + flattened config map); **GlobalContext** is the per-queue entry type stored inside GlobalConfigurationContext (one queue’s config in the execution-tree module).
 
-1. **Load order** (per queue): Redis → DB → `config/<queue>.json` → (if queue ends with `-debug`) `config/<base>.json` → `config/default.json`. For example, `olo-chat-queue-oolama-debug` tries Redis key `olo:kernel:config:olo-chat-queue-oolama-debug:1.0`, then DB, then `olo-chat-queue-oolama-debug.json`, then `olo-chat-queue-oolama.json`, then `default.json`.
-2. **Redis key**: `olo:kernel:config:<queueId>:<version>` (e.g. `olo:kernel:config:olo-chat-queue-oolama:1.0`). QueueId can be the task queue name or a prefixed form.
-3. If **no config is found**, wait for an env-configured number of seconds (e.g. `OLO_CONFIG_RETRY_WAIT_SECONDS`) and retry until a valid configuration is found.
-4. At **bootstrap**, for all queues (e.g. from `OLO_QUEUE`), call the loader and store a **read-only copy** in the **global context map** `<queue, GlobalContext>`.
-5. **Write-back**: When configuration is loaded from a **local config file** (queue or default), it is written back to **Redis and DB** via `ConfigSink` so other containers can use the same config without reading from file.
+1. **Load order** (per tenant and queue): Redis → DB → `config/<queue>.json` → (if queue ends with `-debug`) `config/<base>.json` → `config/default.json`. Redis key is **tenant-scoped** (tenant-first pattern): `<tenantId>:olo:kernel:config:<queueId>:<version>`.
+2. If **no config is found**, wait for an env-configured number of seconds (e.g. `OLO_CONFIG_RETRY_WAIT_SECONDS`) and retry until a valid configuration is found.
+3. At **bootstrap**, for each **tenant** (e.g. from `OLO_TENANT_IDS`) and for all queues (from `OLO_QUEUE`), call the loader and store in **GlobalConfigurationContext.put(tenantKey, queueName, config)**. Bootstrap returns a **BootstrapContext** wrapper (OloConfig + flattened config map for validation), not the store itself.
+4. **Write-back**: When config is loaded from a **local file**, it is written back to **Redis and DB** via `ConfigSink` so other containers can use it.
 
 ### ConfigSource (implement in your app)
 
@@ -170,8 +169,13 @@ public class MyConfigSource implements ConfigSource {
 
     @Override
     public Optional<String> getFromDb(String queueName, String version) {
-        // query DB for config by queue + version
         return Optional.ofNullable(db.findConfig(queueName, version));
+    }
+
+    @Override
+    public Optional<String> getFromDb(String tenantId, String queueName, String version) {
+        // query DB for config by tenant_id, queue, version (multi-tenant)
+        return Optional.ofNullable(db.findConfig(tenantId, queueName, version));
     }
 }
 ```
@@ -205,31 +209,34 @@ import com.olo.executiontree.load.ConfigurationLoader;
 import com.olo.executiontree.load.GlobalConfigurationContext;
 import com.olo.executiontree.load.GlobalContext;
 
-// Single queue: load with retry (Redis → DB → config/chat-queue-oolama.json → config/default.json)
 Path configDir = Path.of("config");
 int retryWaitSeconds = Integer.parseInt(System.getenv().getOrDefault("OLO_CONFIG_RETRY_WAIT_SECONDS", "30"));
-ConfigurationLoader loader = new ConfigurationLoader(myConfigSource, configDir, retryWaitSeconds, "olo:kernel:config");
-PipelineConfiguration config = loader.loadConfiguration("chat-queue-oolama", "1.0");
 
-// With write-back: when config is loaded from file, persist to Redis and DB for other containers
-ConfigurationLoader loaderWithSink = new ConfigurationLoader(
-    myConfigSource, myConfigSink, configDir, retryWaitSeconds, "olo:kernel:config");
+// Single tenant + queue: load with retry (Redis → DB → file → default). Use tenant-scoped prefix for Redis key.
+String tenantId = "default";
+String tenantScopedPrefix = tenantId + ":olo:kernel:config";
+ConfigurationLoader loader = new ConfigurationLoader(
+    myConfigSource, myConfigSink, configDir, retryWaitSeconds, tenantScopedPrefix);
+PipelineConfiguration config = loader.loadConfiguration(tenantId, "chat-queue-oolama", "1.0");
 
-// Bootstrap: load all queues and store read-only copy in global context map (with write-back)
+// Bootstrap: for each tenant, load all queues into GlobalConfigurationContext (runtime store)
+List<String> tenants = List.of("default");
 List<String> queues = List.of("chat-queue-oolama", "rag-queue-openai");
 String version = "1.0";
-GlobalConfigurationContext.loadAllQueuesAndPopulateContext(
-    queues, version, myConfigSource, myConfigSink, configDir, retryWaitSeconds, "olo:kernel:config");
+for (String tenant : tenants) {
+    String prefix = tenant + ":olo:kernel:config";
+    GlobalConfigurationContext.loadAllQueuesAndPopulateContext(
+        tenant, queues, version, myConfigSource, myConfigSink, configDir, retryWaitSeconds, prefix);
+}
 
 // Or use the dedicated bootstrap module (worker does this at startup):
-// GlobalContext ctx = OloBootstrap.initialize();  // reads env, validates OLO_QUEUE, loads pipeline config; exits if no queues
+// BootstrapContext ctx = OloBootstrap.initialize();  // reads env, OLO_TENANT_IDS, OLO_QUEUE; loads config per tenant; returns wrapper
 // OloConfig config = ctx.getConfig();
-// Map<String, PipelineConfiguration> byQueue = ctx.getPipelineConfigByQueue();
+// Map<String, PipelineConfiguration> byKey = ctx.getPipelineConfigByQueue();  // keys "tenant:queue"
 
-// Read from global context
-Map<String, GlobalContext> byQueue = GlobalConfigurationContext.getContextByQueue();
-GlobalContext ctx = GlobalConfigurationContext.get("chat-queue-oolama");
-PipelineConfiguration cfg = ctx.getConfiguration();
+// Read from runtime config store (GlobalConfigurationContext)
+GlobalContext entry = GlobalConfigurationContext.get(tenantId, "chat-queue-oolama");
+PipelineConfiguration cfg = entry != null ? entry.getConfiguration() : null;
 ```
 
 ## Example: minimal second pipeline

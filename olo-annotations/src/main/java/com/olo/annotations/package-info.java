@@ -5,6 +5,7 @@
  *   <li>{@link com.olo.annotations.OloPlugin} – plugin (id, contractType, input/output parameters); processor generates {@code META-INF/olo-plugins.json} for drag-and-drop canvas and variable mapping</li>
  *   <li>{@link com.olo.annotations.OloUiComponent} – UI component (id, name, category); processor generates {@code META-INF/olo-ui-components.json}</li>
  *   <li>{@link com.olo.annotations.FeatureInfo} / {@link com.olo.annotations.PluginInfo} / {@link com.olo.annotations.UiComponentInfo} – JSON DTOs for loading</li>
+ *   <li>{@link com.olo.annotations.ResourceCleanup} – lifecycle: {@link com.olo.annotations.ResourceCleanup#onExit()} for plugins/features to release resources at worker shutdown</li>
  * </ul>
  * Use {@code annotationProcessor project(':olo-annotations')} so the processor runs at compile time and produces the JSON resources.
  */
