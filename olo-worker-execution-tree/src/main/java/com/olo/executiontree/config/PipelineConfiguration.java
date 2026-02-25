@@ -2,9 +2,12 @@ package com.olo.executiontree.config;
 
 import com.fasterxml.jackson.annotation.JsonCreator;
 import com.fasterxml.jackson.annotation.JsonProperty;
+import com.olo.executiontree.defaults.ActivityDefaultTimeouts;
 import com.olo.executiontree.defaults.ExecutionDefaults;
+import com.olo.executiontree.load.NodeTimeoutResolver;
 
 import java.util.Collections;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -65,6 +68,30 @@ public final class PipelineConfiguration {
         return new PipelineConfiguration(
                 version, executionDefaults, pluginRestrictions, featureRestrictions,
                 pipelines != null ? Collections.unmodifiableMap(Map.copyOf(pipelines)) : Map.of());
+    }
+
+    /**
+     * Returns a new configuration with resolved node timeouts for every pipeline.
+     * For each pipeline, resolves scheduleToStartSeconds, startToCloseSeconds, scheduleToCloseSeconds
+     * per node with precedence: current node → parent → global default. Resolution runs at bootstrap.
+     */
+    public PipelineConfiguration withResolvedNodeTimeouts() {
+        Map<String, PipelineDefinition> pipelines = getPipelines();
+        if (pipelines == null || pipelines.isEmpty()) return this;
+        ActivityDefaultTimeouts globalDefault = executionDefaults != null && executionDefaults.getActivity() != null
+                ? executionDefaults.getActivity().getDefaultTimeouts()
+                : ActivityDefaultTimeouts.GLOBAL_DEFAULT;
+        Map<String, PipelineDefinition> resolved = new LinkedHashMap<>();
+        for (Map.Entry<String, PipelineDefinition> e : pipelines.entrySet()) {
+            PipelineDefinition def = e.getValue();
+            if (def == null || def.getExecutionTree() == null) {
+                resolved.put(e.getKey(), def);
+                continue;
+            }
+            Map<String, ActivityDefaultTimeouts> nodeTimeouts = NodeTimeoutResolver.resolve(def.getExecutionTree(), globalDefault);
+            resolved.put(e.getKey(), def.withResolvedNodeTimeouts(nodeTimeouts));
+        }
+        return withPipelines(resolved);
     }
 
     @Override

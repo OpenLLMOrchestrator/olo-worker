@@ -2,7 +2,7 @@
 
 This document defines the node types supported by the execution engine. In code, the node **type** field is represented by the **`NodeType`** enum in `olo-worker-execution-tree` (`com.olo.executiontree.tree.NodeType`). JSON config uses the enum name as string (e.g. `"type": "SEQUENCE"`); unknown values deserialize as `UNKNOWN`.
 
-- **Phase 1 (Must Have):** SEQUENCE, PLUGIN, IF, SWITCH/CASE, ITERATOR, FORK, JOIN — **implemented**.
+- **Phase 1 (Must Have):** SEQUENCE, PLUGIN, IF, SWITCH/CASE, ITERATOR, FORK, JOIN, GROUP — **implemented**.
 - **Phase 2 (Enterprise Ready):** TRY_CATCH, RETRY, SUB_PIPELINE, EVENT_WAIT — **implemented**.
 - **Phase 3 (AI Advantage):** LLM_DECISION, TOOL_ROUTER, EVALUATION, REFLECTION — **implemented**.
 
@@ -17,6 +17,16 @@ Inner nodes (containers) can be any of the above; leaf nodes include PLUGIN. SWI
 - **type:** `"SEQUENCE"`
 - **children:** List of nodes; executed left-to-right in order.
 - **params:** None required.
+
+---
+
+## 1.5 GROUP (Container / model execution)
+
+**Purpose:** Logical container for a group of nodes (e.g. model execution: FORK of plugins + JOIN reducer). Executes children in order, like SEQUENCE. Use with pipeline **executionType: ASYNC** so that FORK children inside the group run in parallel; JOIN runs synchronously to merge.
+
+- **type:** `"GROUP"`
+- **children:** List of nodes; executed in order (e.g. FORK then JOIN).
+- **params:** Optional; e.g. `executionType: "ASYNC"` for documentation when the pipeline is ASYNC.
 
 ---
 
@@ -88,9 +98,9 @@ Inner nodes (containers) can be any of the above; leaf nodes include PLUGIN. SWI
     - **FIRST_WINS** — Same as ANY; run only the first child.
     - **LAST_WINS** — Run all children in order; last child’s variable writes win (overwrite earlier ones).
     - **MAJORITY** — (Future) Proceed when a majority of branches complete.
-    - **REDUCE** — (Future) Custom aggregator over branch results.
+    - **REDUCE** — Run all children, then invoke a **reducer plugin** to merge branch outputs: use **pluginRef** (e.g. `OUTPUT_REDUCER` from **olo-join-reducer**), **inputMappings**, **outputMappings** on the JOIN node. Same invocation as PLUGIN; the reducer (contract type REDUCER) clubs labeled inputs into a single output (e.g. `combinedOutput`).
     - **PLUGIN** — Run all children, then invoke a **plugin** to merge: use **pluginRef**, **inputMappings**, **outputMappings** on the JOIN node (same as a PLUGIN node). The plugin receives the current variable map (after all branches ran) and returns merged output.
-- When **mergeStrategy** is **PLUGIN**, the JOIN node must have **pluginRef** (and typically **inputMappings** / **outputMappings**) set; otherwise the plugin step is skipped.
+- When **mergeStrategy** is **PLUGIN** or **REDUCE**, the JOIN node must have **pluginRef** (and typically **inputMappings** / **outputMappings**) set; otherwise the plugin step is skipped.
 
 Without a defined merge strategy, JOIN cannot be executed correctly; it is required for correct semantics.
 
@@ -120,7 +130,7 @@ Without a defined merge strategy, JOIN cannot be executed correctly; it is requi
 | CASE     | One branch of SWITCH| Body                  | caseValue                           |
 | ITERATOR | Loop / ForEach       | One body              | collectionVariable, itemVariable   |
 | FORK     | Parallel split       | Two or more           | —                                   |
-| JOIN     | Parallel merge       | Per-branch or one     | mergeStrategy (ALL, ANY, FIRST_WINS, LAST_WINS, PLUGIN, …) |
+| JOIN     | Parallel merge       | Per-branch or one     | mergeStrategy (ALL, ANY, FIRST_WINS, LAST_WINS, REDUCE, PLUGIN, …) |
 | PLUGIN   | Call plugin          | None                  | pluginRef, input/output Mappings   |
 
 ---

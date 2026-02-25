@@ -6,6 +6,8 @@ import com.olo.executiontree.config.PipelineConfiguration;
 import com.olo.executiontree.config.PipelineDefinition;
 import com.olo.executiontree.tree.ExecutionTreeNode;
 
+import com.olo.worker.engine.node.NodeExecutor;
+
 import java.util.Collections;
 import java.util.Map;
 import java.util.Objects;
@@ -14,7 +16,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 
 /**
- * Execution engine: orchestrates VariableEngine, FeatureResolver, NodeExecutor, PluginInvoker, ResultMapper.
+ * Execution engine: orchestrates VariableEngine, NodeExecutor (node package), PluginInvoker, ResultMapper.
  * Single entry point to run the execution tree for a pipeline.
  * Prefer {@link #run(ExecutionConfigSnapshot, Map, PluginInvoker.PluginExecutor, Map)} for immutable snapshot and version pinning.
  */

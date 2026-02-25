@@ -35,29 +35,92 @@
       "inputContract": {
         "strict": true,
         "parameters": [
-          { "name": "userQuery", "type": "STRING", "required": true }
+          {
+            "name": "userQuery",
+            "type": "STRING",
+            "required": true
+          }
         ]
       },
       "variableRegistry": [
-        { "name": "userQuery", "type": "STRING", "scope": "IN" },
-        { "name": "rawResponse", "type": "STRING", "scope": "INTERNAL" },
-        { "name": "finalAnswer", "type": "STRING", "scope": "OUT" }
+        {
+          "name": "userQuery",
+          "type": "STRING",
+          "scope": "IN"
+        },
+        {
+          "name": "model1Response",
+          "type": "STRING",
+          "scope": "INTERNAL"
+        },
+        {
+          "name": "model2Response",
+          "type": "STRING",
+          "scope": "INTERNAL"
+        },
+        {
+          "name": "finalAnswer",
+          "type": "STRING",
+          "scope": "OUT"
+        }
       ],
       "scope": {
         "plugins": [
           {
             "id": "GPT4_EXECUTOR",
-            "displayName": "GPT-4 Executor",
+            "displayName": "Ollama",
             "contractType": "MODEL_EXECUTOR",
             "inputParameters": [
-              { "name": "prompt", "type": "STRING", "required": true }
+              {
+                "name": "prompt",
+                "type": "STRING",
+                "required": true
+              }
             ],
             "outputParameters": [
-              { "name": "responseText", "type": "STRING" }
+              {
+                "name": "responseText",
+                "type": "STRING"
+              }
+            ]
+          },
+          {
+            "id": "LITELLM_EXECUTOR",
+            "displayName": "OpenAI (LiteLLM)",
+            "contractType": "MODEL_EXECUTOR",
+            "inputParameters": [
+              {
+                "name": "prompt",
+                "type": "STRING",
+                "required": true
+              }
+            ],
+            "outputParameters": [
+              {
+                "name": "responseText",
+                "type": "STRING"
+              }
+            ]
+          },
+          {
+            "id": "OUTPUT_REDUCER",
+            "displayName": "Output Reducer",
+            "contractType": "REDUCER",
+            "inputParameters": [],
+            "outputParameters": [
+              {
+                "name": "combinedOutput",
+                "type": "STRING"
+              }
             ]
           }
         ],
-        "features": [{"id": "debug", "displayName": "Debug"}]
+        "features": [
+          {
+            "id": "debug",
+            "displayName": "Debug"
+          }
+        ]
       },
       "executionTree": {
         "id": "root",
@@ -65,28 +128,103 @@
         "type": "SEQUENCE",
         "children": [
           {
-            "id": "modelNode",
-            "displayName": "Model",
-            "type": "PLUGIN",
-            "nodeType": "MODEL_EXECUTOR",
-            "pluginRef": "GPT4_EXECUTOR",
-            "inputMappings": [
-              { "pluginParameter": "prompt", "variable": "userQuery" }
-            ],
-            "outputMappings": [
-              { "pluginParameter": "responseText", "variable": "finalAnswer" }
+            "id": "modelExecutionGroup",
+            "displayName": "Model Execution",
+            "type": "GROUP",
+            "children": [
+              {
+                "id": "forkNode",
+                "displayName": "Fork",
+                "type": "FORK",
+                "params": {
+                  "executionType": "ASYNC"
+                },
+                "children": [
+                  {
+                    "id": "model1Node",
+                    "displayName": "Model 1",
+                    "type": "PLUGIN",
+                    "nodeType": "MODEL_EXECUTOR",
+                    "pluginRef": "GPT4_EXECUTOR",
+                    "inputMappings": [
+                      {
+                        "pluginParameter": "prompt",
+                        "variable": "userQuery"
+                      }
+                    ],
+                    "outputMappings": [
+                      {
+                        "pluginParameter": "responseText",
+                        "variable": "model1Response"
+                      }
+                    ]
+                  },
+                  {
+                    "id": "model2Node",
+                    "displayName": "OpenAI",
+                    "type": "PLUGIN",
+                    "nodeType": "MODEL_EXECUTOR",
+                    "pluginRef": "LITELLM_EXECUTOR",
+                    "inputMappings": [
+                      {
+                        "pluginParameter": "prompt",
+                        "variable": "userQuery"
+                      }
+                    ],
+                    "outputMappings": [
+                      {
+                        "pluginParameter": "responseText",
+                        "variable": "model2Response"
+                      }
+                    ]
+                  }
+                ]
+              },
+              {
+                "id": "joinNode",
+                "displayName": "Join",
+                "type": "JOIN",
+                "params": {
+                  "mergeStrategy": "REDUCE"
+                },
+                "pluginRef": "OUTPUT_REDUCER",
+                "inputMappings": [
+                  {
+                    "pluginParameter": "Ollama",
+                    "variable": "model1Response"
+                  },
+                  {
+                    "pluginParameter": "OpenAI",
+                    "variable": "model2Response"
+                  }
+                ],
+                "outputMappings": [
+                  {
+                    "pluginParameter": "combinedOutput",
+                    "variable": "finalAnswer"
+                  }
+                ],
+                "children": []
+              }
             ]
           }
         ]
       },
       "outputContract": {
         "parameters": [
-          { "name": "answer", "type": "STRING" }
+          {
+            "name": "answer",
+            "type": "STRING"
+          }
         ]
       },
       "resultMapping": [
-        { "variable": "finalAnswer", "outputParameter": "answer" }
-      ]
+        {
+          "variable": "finalAnswer",
+          "outputParameter": "answer"
+        }
+      ],
+      "executionType": "ASYNC"
     }
   }
 }

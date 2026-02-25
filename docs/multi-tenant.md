@@ -1,6 +1,6 @@
 # Multi-tenant separation
 
-All data and configuration are scoped by **tenant id**. The tenant id comes from the workflow input: `context.tenantId`. If missing or blank, it is normalized to `"default"`.
+All data and configuration are scoped by **tenant id**. The tenant id comes from the workflow input: `context.tenantId`. If missing or blank, it is normalized using **OLO_DEFAULT_TENANT_ID** (environment variable); if that is unset, a fixed default UUID is used (see `OloConfig.normalizeTenantId(String)`).
 
 ## Redis keys
 
@@ -31,8 +31,8 @@ DB tables that store pipeline config (or any tenant-scoped data) should include 
 ## Configuration
 
 - **OLO_TENANT_IDS**: Comma-separated list of tenant ids to load at bootstrap when Redis `olo:tenants` is not set (default: `default`). Each tenant gets config loaded for all task queues.
-- **OLO_DEFAULT_TENANT_ID**: Tenant id used when workflow `context.tenantId` is missing or blank (normalization). If not set, `"default"` is used. Set to your primary tenant (e.g. a UUID) so blank context uses that tenant’s config and keys.
-- **Tenant from workflow**: Each workflow input can set `context.tenantId`. If not set, **OLO_DEFAULT_TENANT_ID** (or `"default"`) is used.
+- **OLO_DEFAULT_TENANT_ID**: Tenant id used when workflow `context.tenantId` is missing or blank (normalization). If not set, a fixed default UUID is used. Set to your primary tenant (e.g. a UUID) so blank context uses that tenant’s config and keys.
+- **Tenant from workflow**: Each workflow input can set `context.tenantId`. If not set, **OLO_DEFAULT_TENANT_ID** (or the fixed default UUID) is used.
 - **Redis `olo:tenants`**: Optional. JSON array of `{"id":"<tenantId>","name":"<display name>","config":{...}}`. If present and valid at bootstrap, this list is used instead of OLO_TENANT_IDS. The optional **`config`** object is tenant-specific configuration (plugins, features, 3rd party deps, restrictions). See **Tenant-specific configuration** below.
 
 ## Tenant-specific configuration

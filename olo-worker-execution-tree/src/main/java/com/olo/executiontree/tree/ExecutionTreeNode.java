@@ -34,6 +34,9 @@ public final class ExecutionTreeNode {
     private final List<String> featureRequired;
     private final List<String> featureNotRequired;
     private final Map<String, Object> params;
+    private final Integer scheduleToStartSeconds;
+    private final Integer startToCloseSeconds;
+    private final Integer scheduleToCloseSeconds;
 
     @JsonCreator
     public ExecutionTreeNode(
@@ -53,7 +56,10 @@ public final class ExecutionTreeNode {
             @JsonProperty("finallyExecution") List<String> finallyExecution,
             @JsonProperty("featureRequired") List<String> featureRequired,
             @JsonProperty("featureNotRequired") List<String> featureNotRequired,
-            @JsonProperty("params") Map<String, Object> params) {
+            @JsonProperty("params") Map<String, Object> params,
+            @JsonProperty("scheduleToStartSeconds") Integer scheduleToStartSeconds,
+            @JsonProperty("startToCloseSeconds") Integer startToCloseSeconds,
+            @JsonProperty("scheduleToCloseSeconds") Integer scheduleToCloseSeconds) {
         this.id = id;
         this.displayName = displayName;
         this.type = type != null ? type : NodeType.UNKNOWN;
@@ -71,10 +77,28 @@ public final class ExecutionTreeNode {
         this.featureRequired = featureRequired != null ? List.copyOf(featureRequired) : List.of();
         this.featureNotRequired = featureNotRequired != null ? List.copyOf(featureNotRequired) : List.of();
         this.params = params != null ? Map.copyOf(params) : Map.of();
+        this.scheduleToStartSeconds = scheduleToStartSeconds;
+        this.startToCloseSeconds = startToCloseSeconds;
+        this.scheduleToCloseSeconds = scheduleToCloseSeconds;
     }
 
     public String getId() {
         return id;
+    }
+
+    /**
+     * Finds a node by id in the tree (DFS). Returns null if not found.
+     */
+    public static ExecutionTreeNode findNodeById(ExecutionTreeNode root, String nodeId) {
+        if (root == null || nodeId == null || nodeId.isBlank()) return null;
+        if (nodeId.equals(root.id)) return root;
+        if (root.children != null) {
+            for (ExecutionTreeNode child : root.children) {
+                ExecutionTreeNode found = findNodeById(child, nodeId);
+                if (found != null) return found;
+            }
+        }
+        return null;
     }
 
     /** Human-readable name for UI (optional). */
@@ -109,7 +133,10 @@ public final class ExecutionTreeNode {
                 node.finallyExecution,
                 node.featureRequired,
                 node.featureNotRequired,
-                node.params
+                node.params,
+                node.scheduleToStartSeconds,
+                node.startToCloseSeconds,
+                node.scheduleToCloseSeconds
         );
     }
 
@@ -140,7 +167,10 @@ public final class ExecutionTreeNode {
                 node.finallyExecution,
                 node.featureRequired,
                 node.featureNotRequired,
-                node.params
+                node.params,
+                node.scheduleToStartSeconds,
+                node.startToCloseSeconds,
+                node.scheduleToCloseSeconds
         );
     }
 
@@ -224,6 +254,21 @@ public final class ExecutionTreeNode {
         return params;
     }
 
+    /** Optional: schedule-to-start timeout in seconds for this node. Resolved at bootstrap: current → parent → global default. */
+    public Integer getScheduleToStartSeconds() {
+        return scheduleToStartSeconds;
+    }
+
+    /** Optional: start-to-close timeout in seconds for this node. Resolved at bootstrap: current → parent → global default. */
+    public Integer getStartToCloseSeconds() {
+        return startToCloseSeconds;
+    }
+
+    /** Optional: schedule-to-close timeout in seconds for this node. Resolved at bootstrap: current → parent → global default. */
+    public Integer getScheduleToCloseSeconds() {
+        return scheduleToCloseSeconds;
+    }
+
     @Override
     public boolean equals(Object o) {
         if (this == o) return true;
@@ -242,13 +287,16 @@ public final class ExecutionTreeNode {
                 && Objects.equals(finallyExecution, that.finallyExecution)
                 && Objects.equals(featureRequired, that.featureRequired)
                 && Objects.equals(featureNotRequired, that.featureNotRequired)
-                && Objects.equals(params, that.params);
+                && Objects.equals(params, that.params)
+                && Objects.equals(scheduleToStartSeconds, that.scheduleToStartSeconds)
+                && Objects.equals(startToCloseSeconds, that.startToCloseSeconds)
+                && Objects.equals(scheduleToCloseSeconds, that.scheduleToCloseSeconds);
     }
 
     @Override
     public int hashCode() {
         return Objects.hash(id, displayName, type, children, nodeType, pluginRef, inputMappings, outputMappings,
                 features, preExecution, postExecution, postSuccessExecution, postErrorExecution, finallyExecution,
-                featureRequired, featureNotRequired, params);
+                featureRequired, featureNotRequired, params, scheduleToStartSeconds, startToCloseSeconds, scheduleToCloseSeconds);
     }
 }

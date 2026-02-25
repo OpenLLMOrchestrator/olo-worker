@@ -12,7 +12,7 @@ import java.util.Map;
  * Use {@link #execute(Map, TenantConfig)} to receive tenant-specific configuration
  * (e.g. 3rd party base URL, restrictions). The no-arg overload uses {@link TenantConfig#EMPTY}.
  */
-public interface ModelExecutorPlugin {
+public interface ModelExecutorPlugin extends ExecutablePlugin {
 
     /**
      * Executes the model with the given inputs. Default implementation delegates to

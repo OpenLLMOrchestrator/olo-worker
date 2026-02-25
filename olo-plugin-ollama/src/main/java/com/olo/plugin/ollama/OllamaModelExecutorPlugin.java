@@ -136,6 +136,17 @@ public final class OllamaModelExecutorPlugin implements ModelExecutorPlugin, Res
             if (!messageNode.isMissingNode()) {
                 com.fasterxml.jackson.databind.JsonNode c = messageNode.path("content");
                 if (!c.isMissingNode() && !c.isNull()) content = c.asText();
+                if (content == null || content.isEmpty()) {
+                    com.fasterxml.jackson.databind.JsonNode parts = messageNode.path("parts");
+                    if (!parts.isMissingNode() && parts.isArray()) {
+                        StringBuilder sb = new StringBuilder();
+                        for (com.fasterxml.jackson.databind.JsonNode part : parts) {
+                            com.fasterxml.jackson.databind.JsonNode text = part.path("text");
+                            if (!text.isMissingNode() && !text.isNull()) sb.append(text.asText());
+                        }
+                        if (sb.length() > 0) content = sb.toString();
+                    }
+                }
             }
         }
         return new ChatResult(content != null ? content : "", promptTokens, completionTokens, model);

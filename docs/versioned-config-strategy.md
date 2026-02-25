@@ -37,6 +37,25 @@ This document defines how **config file version**, **plugin contract version**, 
   - **Runtime**: Each registered feature (e.g. via `FeatureRegistry`) declares its **contract version** (from `@OloFeature(contractVersion = "1.0")` or equivalent).
 - **Compatibility**: For every feature id listed in scope or attached to nodes, expected contract version comes from FeatureDef; actual from registry. Same rules as plugin: exact match or runtime ≥ expected; otherwise validation fails.
 
+### 2.4 Semantic compatibility rules (explicit contract)
+
+These rules define when a config and runtime are considered compatible. Validation enforces them before execution.
+
+| Artefact | Expected (config) | Actual (runtime) | Compatible? |
+|----------|-------------------|-------------------|-------------|
+| **Config file** | `PipelineConfiguration.version` | Runtime supported range (e.g. min/max) | Config version must be within supported range. Newer config than runtime supports → incompatible. Older config → reject (default) or accept if backward-compatible (policy). |
+| **Plugin contract** | `PluginDef.contractVersion` (scope) | `PluginRegistry.getContractVersion(tenantId, pluginId)` | **Exact match** or **runtime ≥ expected** (if backward-compatible). Runtime older than expected → incompatible. Missing plugin → incompatible. |
+| **Feature contract** | `FeatureDef.contractVersion` (scope) | `FeatureRegistry.getContractVersion(featureName)` | Same as plugin: exact match or runtime ≥ expected. Missing feature → incompatible. |
+
+**Rules in short:**
+
+1. **Config version**: Must fall within runtime’s supported config version range. Outside range → fail.
+2. **Plugin**: For every `pluginRef` in the tree, scope (or default) gives expected contract version; registry gives actual. **Exact match** → OK. **Runtime version ≥ expected** (same major, or defined backward-compatible policy) → OK. Runtime &lt; expected or missing → fail.
+3. **Feature**: For every feature in scope or attached to nodes, same as plugin: exact match or runtime ≥ expected; otherwise fail.
+4. **Missing expected version**: If config does not specify `contractVersion` for a plugin/feature, treat as “any” or use default (e.g. `"1.0"`). If runtime does not declare version, treat as “unknown”; policy can be fail or allow.
+
+Do not relax these rules without an explicit compatibility policy (e.g. “accept older config 1.x when runtime is 2.x”); document any exception.
+
 ---
 
 ## 3. Validation Flow

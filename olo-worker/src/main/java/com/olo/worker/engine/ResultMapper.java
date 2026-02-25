@@ -4,6 +4,7 @@ import com.olo.executiontree.config.PipelineDefinition;
 import com.olo.executiontree.outputcontract.ResultMapping;
 
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 
 /**
@@ -29,6 +30,16 @@ public final class ResultMapper {
         ResultMapping first = mapping.get(0);
         Object val = variableEngine.get(first.getVariable());
         return val != null ? val.toString() : "";
+    }
+
+    /**
+     * Applies the pipeline resultMapping to a variable map and returns the workflow result string.
+     * Used when the variable map was built outside a VariableEngine (e.g. per-node execution).
+     */
+    public static String applyFromMap(PipelineDefinition pipeline, Map<String, Object> variableMap) {
+        Objects.requireNonNull(pipeline, "pipeline");
+        if (variableMap == null) return "";
+        return apply(pipeline, VariableEngine.fromVariableMap(pipeline, variableMap));
     }
 
     private ResultMapper() {

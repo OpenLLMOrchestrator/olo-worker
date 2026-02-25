@@ -68,16 +68,18 @@ This document describes the architecture of the OLO Temporal worker and all feat
 | **olo-worker-configuration** | `OloConfig` from environment: task queues, **OLO_TENANT_IDS**, **OLO_DEFAULT_TENANT_ID**, cache, DB, session prefix, pipeline config dir/version/retry/key prefix; **normalizeTenantId(String)**; **getSessionDataPrefix(tenantId)**, **getPipelineConfigKeyPrefix(tenantId)**; **TenantConfig** / **TenantConfigRegistry** (incl. **quota.softLimit** / **quota.hardLimit** per tenant); **TenantEntry**; `OloSessionCache` (incr/decr/getActiveWorkflowsCount for `<tenantId>:olo:quota:activeWorkflows`); Redis pipeline config source/sink. |
 | **olo-worker-input** | `WorkflowInput`, `InputItem`, **`Routing`** (pipeline, transactionType, transactionId, **configVersion** optional for execution version pinning), `Context`, `Metadata`; storage modes (LOCAL, CACHE, FILE); **InputStorageKeys.cacheKey(tenantId, transactionId, inputName)** for CACHE storage (`olo:<tenantId>:worker:...`). |
 | **olo-worker-execution-tree** | Pipeline model: `PipelineConfiguration`, `PipelineDefinition`, `ExecutionTreeNode` (preExecution, postExecution, **postSuccessExecution**, **postErrorExecution**, **finallyExecution**, featureRequired, featureNotRequired), `Scope` (PluginDef, FeatureDef with optional **contractVersion**); `ExecutionTreeConfig`; **ConfigurationLoader.loadConfiguration(tenantKey, queueName, version)** (Redis key tenant-scoped; DB get/put take tenantId); **GlobalConfigurationContext**: Map&lt;tenantKey, Map&lt;queueName, GlobalContext&gt;&gt;; get(tenantKey, queueName), put(tenantKey, queueName, config), loadAllQueuesAndPopulateContext(tenantKey, queueNames, ...). |
-| **olo-worker-execution-context** | **LocalContext.forQueue(tenantKey, queueName)** and **forQueue(tenantKey, queueName, configVersion)** (version check for execution version pinning): deep copy of pipeline config from global context. **ExecutionConfigSnapshot** (immutable snapshot: tenantId, queueName, pipelineConfiguration, snapshotVersionId); used by ExecutionEngine so no global config reads during run. |
-| **olo-worker-features** | `PreNodeCall`, `PostNodeCall`; **FeatureRegistry** (register by name/phase/applicableNodeTypes/contractVersion; **FeatureEntry**: isPre, isPostSuccess, isPostError, isFinally for phase routing); **FeatureAttachmentResolver** (resolve pre, postSuccess, postError, finally lists from node + queue + scope + registry); **NodeExecutionContext** (nodeId, type, nodeType, attributes, **getTenantId()**, **getTenantConfigMap()** for tenant-specific restrictions/config); **ResolvedPrePost** (getPreExecution, getPostSuccessExecution, getPostErrorExecution, getFinallyExecution; legacy getPostExecution returns union). |
+| **olo-worker-execution-context** | **LocalContext.forQueue(tenantKey, queueName)** and **forQueue(tenantKey, queueName, configVersion)** (version check for execution version pinning): deep copy of pipeline config from global context. **ExecutionConfigSnapshot** (immutable snapshot: tenantId, queueName, pipelineConfiguration, snapshotVersionId, optional **runId** for ledger); used by ExecutionEngine so no global config reads during run. |
+| **olo-worker-features** | Phase contracts: **PreNodeCall** (PRE), **PostSuccessCall** (POST_SUCCESS), **PostErrorCall** (POST_ERROR), **FinallyCall** (FINALLY), **PreFinallyCall** (PRE_FINALLY); legacy **PostNodeCall** (fallback for any post); **FeatureRegistry** (register by name/phase/applicableNodeTypes/contractVersion/**privilege**; **FeatureEntry**: isPre, isPostSuccess, isPostError, isFinally, **isInternal/isCommunity** for phase and privilege routing); **FeaturePrivilege** (INTERNAL, COMMUNITY); **ObserverPreNodeCall** / **ObserverPostNodeCall** (observer-only contracts); **FeatureAttachmentResolver** (resolve pre, postSuccess, postError, finally lists from node + queue + scope + registry); **NodeExecutionContext** (nodeId, type, nodeType, attributes, **getTenantId()**, **getTenantConfigMap()**); **ResolvedPrePost** (getPreExecution, getPostSuccessExecution, getPostErrorExecution, getFinallyExecution; legacy getPostExecution returns union). |
+| **olo-internal-features** | Aggregates kernel-privileged features: **InternalFeatures.registerInternalFeatures(registry, sessionCache, runLedgerOrNull)** registers DebuggerFeature, QuotaFeature, MetricsFeature, and (if ledger enabled) RunLevelLedgerFeature, NodeLedgerFeature; **InternalFeatures.clearLedgerForRun()** for run cleanup. Worker depends on this module and calls it at startup; no direct dependency on olo-feature-debug, olo-feature-quota, olo-feature-metrics from olo-worker. |
 | **olo-feature-debug** | `DebuggerFeature`: PreNodeCall + PostNodeCall; `@OloFeature(name = "debug", phase = PRE_FINALLY, applicableNodeTypes = {"*"})`. before/after log nodeId, type, nodeType, result presence. Registered at startup; auto-attached when queue ends with `-debug`. |
 | **olo-feature-quota** | **QuotaFeature**: `@OloFeature(name = "quota", phase = PRE, applicableNodeTypes = {"SEQUENCE"})`. Runs once at pipeline root (first SEQUENCE); reads **OloSessionCache.getActiveWorkflowsCount(tenantId)**; compares with **tenantConfig.quota.softLimit** / **quota.hardLimit**; if usage &gt; limit throws **QuotaExceededException** (fail-fast, no blocking). **QuotaContext** holds session cache (set at worker startup). Optional 5% burst over softLimit. Add `"quota"` to pipeline scope.features to enable. |
 | **olo-feature-metrics** | **MetricsFeature**: `@OloFeature(name = "metrics", phase = PRE_FINALLY, applicableNodeTypes = {"*"})`. Lazy self-bootstrapping: static **AtomicReference&lt;MeterRegistry&gt;**; on first execution creates **SimpleMeterRegistry** via CAS and reuses forever (thread-safe, lock-free). In **after()** increments **olo.node.executions** counter with tags **tenant**, **nodeType**. Implements **ResourceCleanup**. Kernel untouched. |
-| **olo-run-ledger** | **Run ledger** (env-gated by **OLO_RUN_LEDGER**). **Write-only, fail-safe**. **LedgerStore**, **NoOpLedgerStore**, **JdbcLedgerStore** (tables **olo_run**, **olo_run_node**); **RunLedger**; **LedgerContext**; **NodeAiMetrics**, **NodeReplayMeta**, **NodeFailureMeta**. **RunLevelLedgerFeature** (root); **NodeLedgerFeature** (every node): for **MODEL/PLANNER** node types extracts **token_input_count**, **token_output_count**, **model_name**, **provider** from plugin output (FinOps). Run end: **duration_ms**, **total_nodes**, **total_cost**, **total_tokens** (aggregated from nodes). Node end: **prompt_hash**, **model_config_json**, **tool_calls_json**, **external_payload_ref** (replay); **retry_count**, **execution_stage**, **failure_type** (risk). See docs/run-ledger-schema.md. |
-| **olo-worker-plugin** | `ContractType`, **ModelExecutorPlugin** (`execute(inputs)` default, **execute(inputs, TenantConfig)** for tenant-specific params); **PluginRegistry** tenant-scoped: **Map&lt;tenantId, Map&lt;pluginId, PluginEntry&gt;&gt;**; **get(tenantId, pluginId)**, **getModelExecutor(tenantId, pluginId)**, **registerModelExecutor(tenantId, id, plugin)**; getContractVersion(tenantId, pluginId); getAllByTenant() for shutdown. |
+| **olo-run-ledger** | **Run ledger** (env-gated by **OLO_RUN_LEDGER**). **Write-only, fail-safe**. **LedgerStore**, **NoOpLedgerStore**, **JdbcLedgerStore** (PostgreSQL: **olo_run**, **olo_run_node**, **olo_config**; **UUID** for run_id, tenant_id, node_id, parent_node_id; **TIMESTAMPTZ** for timestamps); **RunLedger**; **LedgerContext** (runId set in NodeExecutor from ExecutionConfigSnapshot, including ASYNC path); **NodeAiMetrics**, **NodeReplayMeta**, **NodeFailureMeta**. **RunLevelLedgerFeature** (root: run start/end, config snapshot in olo_config); **NodeLedgerFeature** (every node: scope includes ledger-node when registered). Run end: error_message, failure_stage, total_prompt_tokens, total_completion_tokens, currency; node end: error_code, error_message, error_details (JSONB), prompt_cost, completion_cost, total_cost, temperature, top_p, provider_request_id, attempt, max_attempts, backoff_ms, parent_node_id, execution_order, depth. See docs/run-ledger-schema.md. |
+| **olo-worker-plugin** | `ContractType`, **ModelExecutorPlugin** (`execute(inputs)` default, **execute(inputs, TenantConfig)** for tenant-specific params); **ReducerPlugin** (REDUCER for JOIN merge); **PluginRegistry** tenant-scoped: **Map&lt;tenantId, Map&lt;pluginId, PluginEntry&gt;&gt;**; **get(tenantId, pluginId)**, **getModelExecutor(tenantId, pluginId)**, **getReducer(tenantId, pluginId)**; getContractVersion(tenantId, pluginId); getAllByTenant() for shutdown. |
+| **olo-join-reducer** | **OutputReducerPlugin** (ReducerPlugin): clubs labeled inputs into `combinedOutput` string (one line per label). **OutputReducerPluginProvider** (OUTPUT_REDUCER, REDUCER). Used by **JOIN** nodes with **mergeStrategy: REDUCE** and pluginRef OUTPUT_REDUCER; registered via olo-internal-plugins. |
 | **olo-plugin-ollama** | `OllamaModelExecutorPlugin` (MODEL_EXECUTOR): **execute(inputs, TenantConfig)** uses tenantConfig.get("ollamaBaseUrl"), get("ollamaModel") when set; `/api/chat`; `@OloPlugin`; registered per tenant as e.g. `GPT4_EXECUTOR` (env or tenant config overrides). |
 | **olo-worker-bootstrap** | `OloBootstrap.initialize()`: build `OloConfig`; **resolve tenant list** from Redis **olo:tenants** (parse id/name/config via TenantEntry.parseTenantEntriesWithConfig); populate **TenantConfigRegistry** from config; if olo:tenants missing, use OLO_TENANT_IDS and write list to Redis; for each tenant load pipeline config into **GlobalConfigurationContext**; return **BootstrapContext** (config, **getTenantIds()**, flattened map keyed by `"tenant:queue"`). |
-| **olo-worker** | `OloWorkerApplication`: bootstrap; **register plugins per tenant**; **QuotaContext.setSessionCache(sessionCache)**; register **QuotaFeature**; **OloKernelActivitiesImpl(sessionCache, allowedTenantIds)**; unknown-tenant check; **INCR** activeWorkflows; **try {** LocalContext, snapshot, **ExecutionEngine.run(snapshot, ...)** **} finally { DECR activeWorkflows }** (DECR must always run); NodeExecutor, PluginInvoker, ResultMapper; shutdown invokes ResourceCleanup on all plugins/features. |
+| **olo-worker** | `OloWorkerApplication`: bootstrap; **register plugins per tenant**; create sessionCache and runLedger (if enabled); **InternalFeatures.registerInternalFeatures(registry, sessionCache, runLedger)**; **OloKernelActivitiesImpl(sessionCache, allowedTenantIds, runLedger)**; unknown-tenant check; **INCR** activeWorkflows; **try {** LocalContext, snapshot (with runId when ledger enabled), **ExecutionEngine.run(snapshot, ...)** **} finally { DECR activeWorkflows }** (DECR must always run); NodeExecutor (sets LedgerContext from snapshot runId, including ASYNC; **community pre features** catch-and-log); PluginInvoker, ResultMapper; workflow **OloKernelWorkflow** / **OloKernelWorkflowImpl** in package `com.olo.worker.workflow`; shutdown invokes ResourceCleanup on all plugins/features. |
 
 ---
 
@@ -92,7 +94,7 @@ This document describes the architecture of the OLO Temporal worker and all feat
 - **Quota (fail-fast)**: **QuotaFeature** (PRE phase, applicable to pipeline root / SEQUENCE): reads current usage from Redis **getActiveWorkflowsCount(tenantId)**; compares with **tenantConfig.quota.softLimit** / **quota.hardLimit**; if exceeded throws **QuotaExceededException** (no blocking). Redis **INCR** at run start, **DECR** in **finally** (always runs so quota does not drift).
 - **Plugin/feature contracts**: Tenant-scoped **PluginRegistry**; **ModelExecutorPlugin.execute(inputs, TenantConfig)**; **ResourceCleanup.onExit()** at shutdown.
 - **Session storage**: Tenant-first keys `<tenantId>:olo:kernel:sessions:<transactionId>:USERINPUT`.
-- **Run ledger** (optional): When **OLO_RUN_LEDGER=true**, RunLevelLedgerFeature (root) and NodeLedgerFeature (every node) are registered. Activity records run start/end with **duration_ms**; run end aggregates **total_nodes**, **total_cost**, **total_tokens**. For **MODEL** and **PLANNER** node types, NodeLedgerFeature persists **token_input_count**, **token_output_count**, **model_name**, **provider** (AI cost tracking). Replay fields (**prompt_hash**, **model_config_json**, **tool_calls_json**, **external_payload_ref**) and failure meta (**retry_count**, **execution_stage**, **failure_type**) supported. Write-only, fail-safe. Tables **olo_run**, **olo_run_node**; indexes for status, pipeline, node_type (see docs/run-ledger-schema.md).
+- **Run ledger** (optional): When **OLO_RUN_LEDGER=true**, RunLevelLedgerFeature (root) and NodeLedgerFeature (every node) are registered. Activity records run start/end with **duration_ms**, run-level **error_message**, **failure_stage**, **total_prompt_tokens**, **total_completion_tokens**, **currency**; run end aggregates **total_nodes**, **total_cost**, **total_tokens**. Config snapshot (config_version, snapshot_version_id, plugin_versions) is stored only in **olo_config** (immutable per run). For **MODEL** and **PLANNER** node types, NodeLedgerFeature persists **token_input_count**, **token_output_count**, **model_name**, **provider**, **prompt_cost**, **completion_cost**, **total_cost**; replay (**prompt_hash**, **model_config_json**, **tool_calls_json**, **temperature**, **top_p**, **provider_request_id**) and failure meta (**error_code**, **error_message**, **error_details**, **retry_count**, **attempt**, **max_attempts**, **backoff_ms**, **execution_stage**, **failure_type**); hierarchy (**parent_node_id**, **execution_order**, **depth**). **run_id**, **tenant_id**, **node_id**, **parent_node_id** are **UUID**; timestamps **TIMESTAMPTZ**. Write-only, fail-safe. See docs/run-ledger-schema.md.
 - **Feature phases**: Pre, postSuccess, postError, finally; **NodeExecutionContext** with tenantId and tenantConfigMap.
 
 ### 3.1 Annotations and generated metadata (olo-annotations)
@@ -137,14 +139,16 @@ These files support loading features/plugins/UI components at bootstrap or in a 
 
   The executor runs **one pre list** before the node and **three post lists** after: **postSuccess** (on normal completion), **postError** (on exception), **finally** (always). Features are routed by phase: PRE/PRE_FINALLY → pre; POST_SUCCESS/PRE_FINALLY → postSuccess; POST_ERROR/PRE_FINALLY → postError; FINALLY/PRE_FINALLY → finally.
 
-- **PreNodeCall**  
-  Interface: `void before(NodeExecutionContext context)`. Implement for logic that runs before a tree node executes.
-
-- **PostNodeCall**  
-  Interface: `void after(NodeExecutionContext context, Object nodeResult)`. Implement for logic that runs after a tree node executes. The executor invokes it from the appropriate list: postSuccess (result may be non-null), postError (result usually null), or finally (result may be null if the node threw).
+- **Phase contracts (five; implement one or more per feature):**
+  - **PreNodeCall** — `void before(NodeExecutionContext context)`. Phase PRE (and pre part of PRE_FINALLY).
+  - **PostSuccessCall** — `void afterSuccess(NodeExecutionContext context, Object nodeResult)`. Phase POST_SUCCESS.
+  - **PostErrorCall** — `void afterError(NodeExecutionContext context, Object nodeResult)`. Phase POST_ERROR.
+  - **FinallyCall** — `void afterFinally(NodeExecutionContext context, Object nodeResult)`. Phase FINALLY.
+  - **PreFinallyCall** — extends PreNodeCall and adds `afterSuccess`, `afterError`, `afterFinally`. Phase PRE_FINALLY (before + all three post moments).
+  - **PostNodeCall** (legacy) — `void after(NodeExecutionContext context, Object nodeResult)`. Fallback for any post phase when the feature does not implement the phase-specific contract (PostSuccessCall, PostErrorCall, FinallyCall, or PreFinallyCall).
 
 - **FeatureRegistry**  
-  Singleton. Register feature instances (with `@OloFeature` or explicit metadata: name, phase, applicableNodeTypes, optional contractVersion). Look up by name; **getContractVersion(name)** for config compatibility. **FeatureEntry** exposes **isPre()**, **isPostSuccess()**, **isPostError()**, **isFinally()** so the resolver can route the feature into the correct list. Default phase when not specified: **PRE_FINALLY**. Features that hold resources should implement **ResourceCleanup**; the worker calls **onExit()** on each at shutdown.
+  Singleton. Register feature instances (with `@OloFeature` or explicit metadata: name, phase, applicableNodeTypes, optional contractVersion, **privilege**). Use **registerInternal(instance)** or **registerCommunity(instance)** to set privilege; **register(instance)** defaults to INTERNAL. Look up by name; **getContractVersion(name)** for config compatibility. **FeatureEntry** exposes **isPre()**, **isPostSuccess()**, **isPostError()**, **isFinally()**, **getPrivilege()** / **isInternal()** / **isCommunity()** so the resolver and executor can route and enforce behavior. Default phase when not specified: **PRE_FINALLY**. Features that hold resources should implement **ResourceCleanup**; the worker calls **onExit()** on each at shutdown.
 
 - **FeatureAttachmentResolver**  
   Resolves the effective pre and post feature name lists for a node by merging:
@@ -160,6 +164,86 @@ These files support loading features/plugins/UI components at bootstrap or in a 
 - **ResolvedPrePost**  
   Result of resolution: **getPreExecution()**, **getPostSuccessExecution()**, **getPostErrorExecution()**, **getFinallyExecution()** — ordered lists of feature names (no duplicates). Legacy **getPostExecution()** returns the union of the three post lists. The executor runs **pre** → execute → **postSuccess** (on normal completion) or **postError** (on exception) → **finally** (always).
 
+#### 3.2.1 Feature execution order (defined contract)
+
+A single-page diagram reference: [**feature-ordering-diagram.md**](feature-ordering-diagram.md).
+
+**Phase execution flow (per node):**
+
+```
+    ┌─────────────────────────────────────┐
+    │  PRE                                │  ← All features in resolved pre list (in order)
+    └─────────────────────────────────────┘
+                      ↓
+    ┌─────────────────────────────────────┐
+    │  NODE EXECUTION                     │  ← Plugin invoke, sequence no-op, etc.
+    └─────────────────────────────────────┘
+                      ↓
+         ┌────────────┴────────────┐
+         ↓                         ↓
+    ┌─────────────┐          ┌─────────────┐
+    │ POST_SUCCESS│          │ POST_ERROR  │  ← On normal completion   ← On exception
+    └─────────────┘          └─────────────┘
+         └────────────┬────────────┘
+                      ↓
+    ┌─────────────────────────────────────┐
+    │  FINALLY                             │  ← Always runs (after postSuccess or postError)
+    └─────────────────────────────────────┘
+```
+
+**Resolved feature order (within each phase):**  
+The order of feature names in each list is determined by merge order below. **featureNotRequired** excludes; **first occurrence wins** (no duplicates). **scope.features** and **node.features** order are each preserved; if the same feature is in both, **node.features wins** for position (processed before scope).
+
+```
+    Merge order (first → last = execution order):
+
+    1. Node explicit    preExecution, postSuccessExecution, postErrorExecution, finallyExecution
+    2. Legacy           postExecution (→ all three post lists)
+    3. Node shorthand   features   ← order preserved; same feature here and in scope → position from here
+    4. Scope + queue    pipeline scope features, queue-based (e.g. -debug → "debug")   ← order preserved
+    5. Required         featureRequired
+
+    Excluded at any step:  featureNotRequired
+```
+
+**Phase order (per node):**  
+For each execution tree node, the executor runs phases in this order:
+
+1. **Pre** — All features in the resolved pre list, in list order.
+2. **Node** — Node logic (e.g. plugin invoke, sequence no-op).
+3. **PostSuccess** (if the node completed normally) — All features in the resolved postSuccess list, in list order.
+4. **PostError** (if the node threw) — All features in the resolved postError list, in list order.
+5. **Finally** — All features in the resolved finally list, in list order. Always runs after PostSuccess or PostError.
+
+**Within-phase order (order of feature names in each list):**  
+Determined by **FeatureAttachmentResolver**. Features are merged in this order (first occurrence wins; no duplicates):
+
+1. Node’s explicit lists: `preExecution`, `postSuccessExecution`, `postErrorExecution`, `finallyExecution`.
+2. Legacy `postExecution` (appended to all three post lists).
+3. Node’s `features` (shorthand; each feature added to its phases per registry).
+4. Pipeline/scope features and queue-based (e.g. queue name ends with `-debug` → add `debug`).
+5. Node’s `featureRequired`.
+
+Features in `featureNotRequired` are excluded. Execution within each phase follows the resolved list order (first name → first executed).
+
+**Order determinism (explicit contract):**
+
+- **Is scope.features order preserved?** Yes. Features from pipeline scope are added in the order they appear in `scope.features`; that order is preserved in the resolved list.
+- **Is node.features order preserved?** Yes. Features from `node.features` are added in the order they appear in the list; that order is preserved.
+- **If both specify the same feature, which wins?** The **first source in the merge order** wins for position. Merge order is: node explicit → legacy → node features → scope → required. So if the same feature appears in both `node.features` and `scope.features`, it is added when **node.features** is processed (node.features comes before scope). The feature’s position is then the one from the node.features pass; scope does not add it again (no duplicate). Do not rely on scope to define position for a feature that is also in node.features—node wins.
+
+#### 3.2.2 Internal vs community feature privilege
+
+Features are split into two privilege levels (similar to internal vs community plugins).
+
+- **Internal (kernel-privileged)**  
+  Registered via **registerInternal(...)** or **register(...)**. Olo-controlled, part of the fat JAR (see **olo-internal-features**). Allowed to: block execution, mutate context, affect failure semantics, persist ledger entries, enforce quotas, inject audit behavior, run in any phase. Examples: Quota, Ledger, deterministic guard, compliance, security policy. If an internal feature throws in a pre hook, the executor propagates the exception and execution fails.
+
+- **Community (restricted)**  
+  Registered via **registerCommunity(...)**. Must be **observer-class only**: may read **NodeExecutionContext**, log, emit metrics, append attributes. Must **not**: block execution, modify the execution plan, throw policy exceptions, override failure semantics. If a community feature throws, the executor catches, logs, and continues (observer must not block). Optional observer contracts: **ObserverPreNodeCall**, **ObserverPostNodeCall** (same signatures as PreNodeCall/PostNodeCall; document observer-only semantics).
+
+The executor enforces this in **NodeExecutor.runPre**: for **COMMUNITY** features it wraps the pre call in try/catch and logs on failure; for **INTERNAL** features it lets exceptions propagate. Post hooks are already catch-and-log for all features.
+
 ---
 
 ### 3.3 Debug feature (olo-feature-debug)
@@ -170,7 +254,7 @@ These files support loading features/plugins/UI components at bootstrap or in a 
   - **after**: logs `[DEBUG] post nodeId=… type=… nodeType=… resultPresent=…` at INFO.
 
 - **Registration**  
-  In `OloWorkerApplication`, `FeatureRegistry.getInstance().register(new DebuggerFeature())` is called at startup.
+  Registered at startup via **InternalFeatures.registerInternalFeatures(...)** (olo-internal-features).
 
 - **When it runs**  
   Debug runs as part of **tree traversal** in `runExecutionTree`: for every node the resolver attaches the debug feature when the effective queue ends with `-debug`. Because the phase is **PRE_FINALLY**, debug is added to the **pre** list and to **postSuccess**, **postError**, and **finally** lists. The executor runs pre (logs once) → execute → postSuccess or postError → finally (logs again), so debug logs appear before and after each node (including SEQUENCE and PLUGIN).

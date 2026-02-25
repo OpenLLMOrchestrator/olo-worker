@@ -46,4 +46,43 @@ public interface OloKernelActivities {
      */
     @ActivityMethod
     String runExecutionTree(String queueName, String workflowInputJson);
+
+    /**
+     * Returns an execution plan JSON when the tree is linear (only SEQUENCE, GROUP, and leaf nodes).
+     * Plan contains: linear (true/false), and when true: configJson, pipelineName, queueName,
+     * workflowInputJson, nodes (array of {activityType, nodeId}). Activities are leaf nodes (no children) or feature-type nodes;
+     * internal nodes are not activity types. The workflow schedules one Temporal activity per leaf/activity.
+     *
+     * @param queueName         pipeline/task queue name
+     * @param workflowInputJson workflow input JSON
+     * @return plan JSON string
+     */
+    @ActivityMethod
+    String getExecutionPlan(String queueName, String workflowInputJson);
+
+    /**
+     * Applies the pipeline resultMapping to the variable map and returns the workflow result string.
+     *
+     * @param planJson      JSON string from getExecutionPlan (must have linear=true; used for configJson, pipelineName)
+     * @param variableMapJson variable map JSON after per-node execution
+     * @return workflow result string
+     */
+    @ActivityMethod
+    String applyResultMapping(String planJson, String variableMapJson);
+
+    /**
+     * Executes a single node (for per-node workflow path). Activities are leaf nodes (no children) or feature-type nodes;
+     * activity type is "NODETYPE" or "PLUGIN:pluginRef" (e.g. "PLUGIN:GPT4_EXECUTOR"). Temporal event history shows this as "ExecuteNode".
+     *
+     * @param activityType   logical type for this node (NODETYPE or PLUGIN:pluginRef for leaf/activity nodes)
+     * @param planJson       plan JSON from getExecutionPlan
+     * @param nodeId         node id to execute
+     * @param variableMapJson current variable map JSON
+     * @param queueName      task queue name
+     * @param workflowInputJson workflow input JSON
+     * @return updated variable map JSON
+     */
+    @ActivityMethod
+    String executeNode(String activityType, String planJson, String nodeId, String variableMapJson,
+                       String queueName, String workflowInputJson);
 }

@@ -1,0 +1,26 @@
+plugins {
+    id 'java-library'
+}
+
+group = 'com.olo'
+version = '1.0.0-SNAPSHOT'
+
+java {
+    sourceCompatibility = JavaVersion.VERSION_17
+    targetCompatibility = JavaVersion.VERSION_17
+}
+
+repositories {
+    mavenCentral()
+}
+
+dependencies {
+    api project(':olo-annotations')
+    api project(':olo-worker-features')
+    api project(':olo-worker-configuration')
+    api project(':olo-feature-debug')
+    api project(':olo-feature-quota')
+    api project(':olo-feature-metrics')
+    api project(':olo-run-ledger')
+    implementation 'org.slf4j:slf4j-api:2.0.9'
+}

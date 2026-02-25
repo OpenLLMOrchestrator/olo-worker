@@ -1,0 +1,26 @@
+plugins {
+    id 'java-library'
+}
+
+group = 'com.olo'
+version = '1.0.0-SNAPSHOT'
+
+java {
+    sourceCompatibility = JavaVersion.VERSION_17
+    targetCompatibility = JavaVersion.VERSION_17
+}
+
+repositories {
+    mavenCentral()
+}
+
+dependencies {
+    api project(':olo-worker-plugin')
+    api project(':olo-join-reducer')
+    // Internal plugins: part of fat JAR, registered in InternalPlugins.createPluginManager()
+    api project(':olo-plugin-ollama')
+    api project(':olo-plugin-litellm')
+    api project(':olo-plugin-qdrant')
+    api project(':olo-plugin-embedding-ollama')
+    implementation 'org.slf4j:slf4j-api:2.0.9'
+}

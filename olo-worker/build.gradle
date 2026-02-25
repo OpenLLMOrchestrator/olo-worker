@@ -24,11 +24,9 @@ dependencies {
     implementation project(':olo-worker-features')
     implementation project(':olo-worker-input')
     implementation project(':olo-worker-plugin')
-    implementation project(':olo-feature-debug')
-    implementation project(':olo-feature-quota')
-    implementation project(':olo-feature-metrics')
+    implementation project(':olo-internal-features')
     implementation project(':olo-run-ledger')
-    implementation project(':olo-plugin-ollama')
+    implementation project(':olo-internal-plugins')
     implementation 'io.temporal:temporal-sdk:1.24.1'
     runtimeOnly 'org.slf4j:slf4j-simple:2.0.9'
     testImplementation 'io.temporal:temporal-testing:1.24.1'

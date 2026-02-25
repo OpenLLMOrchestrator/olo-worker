@@ -6,7 +6,20 @@ import java.util.List;
 import java.util.Objects;
 import java.util.Set;
 
-/** Result of resolving which features to run before and after a node (pre; postSuccess, postError, finally). */
+/**
+ * Result of resolving which features to run before and after a node (pre; postSuccess, postError, finally).
+ * <p>
+ * <b>Feature execution order (per node)</b>
+ * <ol>
+ *   <li><b>Pre</b> – all features in {@link #getPreExecution()} in list order</li>
+ *   <li><b>Node</b> – node logic (e.g. plugin invoke, sequence no-op)</li>
+ *   <li>On success: <b>PostSuccess</b> – all features in {@link #getPostSuccessExecution()} in list order</li>
+ *   <li>On error: <b>PostError</b> – all features in {@link #getPostErrorExecution()} in list order</li>
+ *   <li><b>Finally</b> – all features in {@link #getFinallyExecution()} in list order (always runs after PostSuccess or PostError)</li>
+ * </ol>
+ * The order of feature names within each list is determined by {@link com.olo.features.FeatureAttachmentResolver}
+ * (explicit node lists first, then legacy postExecution, then scope/required features).
+ */
 public final class ResolvedPrePost {
 
     private final List<String> preExecution;

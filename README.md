@@ -17,7 +17,11 @@ Java Gradle application that runs a Temporal worker with task queues and infrast
 | `OLO_CACHE_PORT` | Cache port | `6379` |
 | `OLO_DB_HOST` | Database host | `localhost` |
 | `OLO_DB_PORT` | Database port | `5432` |
-| `OLO_SESSION_DATA` | Session key prefix; workflow input stored at `<prefix><transactionId>:USERINPUT` | `olo:kernel:sessions:` |
+| `OLO_DB_NAME` | Database name (default: `temporal`) | `temporal` |
+| `OLO_RUN_LEDGER` | When `true`, persist run/node records to DB (olo_run, olo_run_node, olo_config). Default true in dev. | `true` |
+| `OLO_TENANT_IDS` | Comma-separated tenant ids when Redis `olo:tenants` is not set | `default` |
+| `OLO_DEFAULT_TENANT_ID` | Tenant id when workflow `context.tenantId` is missing or blank | `2a2a91fb-f5b4-4cf0-b917-524d242b2e3d` |
+| `OLO_SESSION_DATA` | Session key prefix; workflow input stored at `<tenantId>:olo:kernel:sessions:<transactionId>:USERINPUT` | `<tenant>:olo:kernel:sessions:` |
 
 Temporal connection (target and namespace) is taken from **pipeline configuration** (`executionDefaults.temporal.target` and `executionDefaults.temporal.namespace` in your pipeline config JSON), not from environment variables.
 
@@ -73,8 +77,22 @@ export OLO_DB_PORT=5432
 ## Project layout (multi-module)
 
 - **Root** — parent Gradle project; no application code.
-- **`olo-worker-configuration`** — separate module with `com.olo.config.OloConfig`; reads all `OLO_*` env and exposes `getTaskQueues()`, cache/DB/Temporal settings. No Temporal dependency.
-- **`olo-worker`** — application module; depends on `olo-worker-configuration` and Temporal SDK. `OloWorkerApplication` builds the Temporal client and workers for each task queue; register workflows/activities there.
+- **olo-annotations** — `@OloFeature`, `@OloPlugin`, `@OloUiComponent`; ResourceCleanup; annotation processor for feature/plugin/UI metadata.
+- **olo-worker-configuration** — `OloConfig` from env (queues, cache, DB, session/config prefixes, **OLO_TENANT_IDS**, **OLO_DEFAULT_TENANT_ID**); `OloSessionCache`; TenantConfig / TenantConfigRegistry.
+- **olo-worker-input** — `WorkflowInput`, `InputItem`, `Context`, `Routing`, `Metadata`; storage modes (LOCAL, CACHE, FILE).
+- **olo-worker-execution-tree** — Pipeline model, `ExecutionTreeNode`, `GlobalConfigurationContext`, configuration loader (Redis/DB/file).
+- **olo-worker-execution-context** — `LocalContext`, `ExecutionConfigSnapshot` (tenantId, queueName, config, optional runId).
+- **olo-run-ledger** — Run ledger (optional): `LedgerStore`, `JdbcLedgerStore` (olo_run, olo_run_node, olo_config; UUID/TIMESTAMPTZ); RunLedger, RunLevelLedgerFeature, NodeLedgerFeature.
+- **olo-worker-features** — FeatureRegistry, PreNodeCall/PostNodeCall, FeatureAttachmentResolver, NodeExecutionContext.
+- **olo-feature-debug** — DebuggerFeature (pre/post logging when queue ends with `-debug`).
+- **olo-feature-quota** — QuotaFeature (per-tenant soft/hard limits from Redis activeWorkflows).
+- **olo-feature-metrics** — MetricsFeature (node execution counters).
+- **olo-worker-plugin** — ModelExecutorPlugin, PluginRegistry (tenant-scoped).
+- **olo-plugin-ollama** — Ollama model-executor plugin.
+- **olo-worker-bootstrap** — `OloBootstrap.initialize()`: tenant list (Redis olo:tenants or OLO_TENANT_IDS), GlobalConfigurationContext, BootstrapContext.
+- **olo-worker** — Application: `OloWorkerApplication`; Temporal client and workers per task queue; **OloKernelWorkflow** / **OloKernelWorkflowImpl**; OloKernelActivitiesImpl; ExecutionEngine, NodeExecutor, PluginInvoker, ResultMapper.
+
+See [docs/architecture-and-features.md](docs/architecture-and-features.md) for the full module map and data flow.
 
 ## License
 

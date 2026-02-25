@@ -84,6 +84,7 @@ Tree of nodes. **Node types:** SEQUENCE, IF, SWITCH, ITERATOR, FORK, JOIN, PLUGI
 - **finallyExecution** (optional): feature names to run **after** this node (success or error).
 - **featureRequired** (optional): features that must be attached (resolver adds by phase).
 - **featureNotRequired** (optional): features to **exclude** for this node (e.g. opt out of debug with `["debug"]`).
+- **scheduleToStartSeconds**, **startToCloseSeconds**, **scheduleToCloseSeconds** (optional, per node): activity timeout overrides. **Precedence:** current node → parent → … → global default (`executionDefaults.activity.defaultTimeouts`). Resolved at **bootstrap** so each pipeline has final applicable timeouts in `getResolvedNodeTimeouts()` (node id → timeouts). Omit on a node to inherit from parent or global.
 
 When the queue name ends with **-debug** and the **debug** feature is in the pipeline/global feature list, the Debugger feature is attached to all nodes (applicableNodeTypes `"*"`) unless the node lists `"debug"` in **featureNotRequired**. Use **FeatureAttachmentResolver.resolve(node, queueName, scopeFeatureNames, registry)** to get the effective **ResolvedPrePost** (pre, postSuccess, postError, finally). The executor runs postSuccess on normal completion, postError on exception, then finally always. See **olo-worker-features** and [architecture-and-features.md](architecture-and-features.md).
 

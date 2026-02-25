@@ -41,7 +41,7 @@ public final class PluginInvoker {
         }
         String inputsJson = pluginExecutor.toJson(pluginInputs);
         long start = System.currentTimeMillis();
-        String outputsJson = pluginExecutor.execute(pluginRef, inputsJson);
+        String outputsJson = pluginExecutor.execute(pluginRef, inputsJson, node.getId());
         long durationMs = System.currentTimeMillis() - start;
         Map<String, Object> outputs = pluginExecutor.fromJson(outputsJson);
         for (ParameterMapping m : node.getOutputMappings()) {
@@ -73,7 +73,7 @@ public final class PluginInvoker {
             }
         }
         String inputsJson = pluginExecutor.toJson(pluginInputs);
-        String outputsJson = pluginExecutor.execute(pluginRef, inputsJson);
+        String outputsJson = pluginExecutor.execute(pluginRef, inputsJson, null);
         Map<String, Object> outputs = pluginExecutor.fromJson(outputsJson);
         Object firstOutput = null;
         if (outputParamToVar != null) {
@@ -88,7 +88,13 @@ public final class PluginInvoker {
 
     /** Abstraction for executing a plugin and JSON serialization (e.g. activity implementation). */
     public interface PluginExecutor {
-        String execute(String pluginId, String inputsJson);
+        /** Executes the plugin; when {@code nodeId} is non-null, per-node instance is used (same nodeId → same instance in a run). */
+        String execute(String pluginId, String inputsJson, String nodeId);
+
+        default String execute(String pluginId, String inputsJson) {
+            return execute(pluginId, inputsJson, null);
+        }
+
         String toJson(Map<String, Object> map);
         Map<String, Object> fromJson(String json);
     }

@@ -18,6 +18,8 @@ public enum NodeType {
     ITERATOR,
     FORK,
     JOIN,
+    /** Container group (e.g. model execution); executes children in order like SEQUENCE. */
+    GROUP,
     PLUGIN,
     TRY_CATCH,
     RETRY,

@@ -10,23 +10,31 @@ import com.olo.executioncontext.ExecutionConfigSnapshot;
 import com.olo.executioncontext.LocalContext;
 import com.olo.executiontree.config.PipelineConfiguration;
 import com.olo.executiontree.config.PipelineDefinition;
+import com.olo.executiontree.config.ExecutionType;
 import com.olo.executiontree.tree.ExecutionTreeNode;
 import com.olo.executiontree.tree.NodeType;
+import com.olo.executiontree.tree.ParameterMapping;
 import com.olo.input.model.WorkflowInput;
 import com.olo.ledger.LedgerContext;
 import com.olo.ledger.RunLedger;
-import com.olo.ledger.RunLevelLedgerFeature;
-import com.olo.plugin.ModelExecutorPlugin;
+import com.olo.internal.features.InternalFeatures;
+import com.olo.plugin.ExecutablePlugin;
 import com.olo.plugin.PluginRegistry;
 import com.olo.worker.engine.ExecutionEngine;
+import com.olo.worker.engine.ExecutionPlanBuilder;
+import com.olo.worker.engine.node.NodeExecutor;
 import com.olo.worker.engine.PluginInvoker;
+import com.olo.worker.engine.ResultMapper;
+import com.olo.worker.engine.VariableEngine;
 import io.temporal.activity.Activity;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 import java.util.TreeMap;
 import java.util.UUID;
@@ -67,7 +75,18 @@ public class OloKernelActivitiesImpl implements OloKernelActivities {
         WorkflowInput input = WorkflowInput.fromJson(workflowInputJson);
         sessionCache.cacheUpdate(input);
         String transactionId = input.getRouting() != null ? input.getRouting().getTransactionId() : null;
-        log.info("OloKernel processed workflow input, transactionId: {}", transactionId);
+        String pipeline = input.getRouting() != null ? input.getRouting().getPipeline() : null;
+        String transactionType = input.getRouting() != null && input.getRouting().getTransactionType() != null
+                ? input.getRouting().getTransactionType().name() : null;
+        String configVersion = input.getRouting() != null ? input.getRouting().getConfigVersion() : null;
+        String tenantId = input.getContext() != null ? input.getContext().getTenantId() : null;
+        String sessionId = input.getContext() != null ? input.getContext().getSessionId() : null;
+        String version = input.getVersion();
+        int inputsCount = input.getInputs() != null ? input.getInputs().size() : 0;
+        String ragTag = input.getMetadata() != null ? input.getMetadata().getRagTag() : null;
+        Long metadataTimestamp = input.getMetadata() != null ? input.getMetadata().getTimestamp() : null;
+        log.info("OloKernel processed workflow input | transactionId={} | pipeline={} | transactionType={} | tenantId={} | sessionId={} | version={} | configVersion={} | inputsCount={} | ragTag={} | metadataTimestamp={}",
+                transactionId, pipeline, transactionType, tenantId, sessionId, version, configVersion, inputsCount, ragTag, metadataTimestamp);
         return transactionId != null ? transactionId : "unknown";
     }
 
@@ -77,12 +96,20 @@ public class OloKernelActivitiesImpl implements OloKernelActivities {
     }
 
     /**
-     * Executes a plugin for the given tenant (tenant-scoped plugin resolution).
+     * Executes a plugin for the given tenant. When {@code nodeId} and {@code nodeInstanceCache} are non-null,
+     * uses per-node instance (one per tree node; same node in a loop reuses the same instance).
      */
     private String executePlugin(String tenantId, String pluginId, String inputsJson) {
-        ModelExecutorPlugin plugin = PluginRegistry.getInstance().getModelExecutor(tenantId, pluginId);
+        return executePlugin(tenantId, pluginId, inputsJson, null, null);
+    }
+
+    private String executePlugin(String tenantId, String pluginId, String inputsJson,
+                                  String nodeId, java.util.Map<String, ExecutablePlugin> nodeInstanceCache) {
+        ExecutablePlugin plugin = (nodeId != null && nodeInstanceCache != null)
+                ? PluginRegistry.getInstance().getExecutable(tenantId, pluginId, nodeId, nodeInstanceCache)
+                : PluginRegistry.getInstance().getExecutable(tenantId, pluginId);
         if (plugin == null) {
-            throw new IllegalArgumentException("No model-executor plugin registered for tenant=" + tenantId + " id=" + pluginId);
+            throw new IllegalArgumentException("No plugin registered for tenant=" + tenantId + " id=" + pluginId);
         }
         Map<String, Object> inputs;
         try {
@@ -120,6 +147,234 @@ public class OloKernelActivitiesImpl implements OloKernelActivities {
     }
 
     @Override
+    @SuppressWarnings("unchecked")
+    public String getExecutionPlan(String queueName, String workflowInputJson) {
+        WorkflowInput workflowInput;
+        try {
+            workflowInput = WorkflowInput.fromJson(workflowInputJson);
+        } catch (Exception e) {
+            log.warn("Invalid workflow input JSON for getExecutionPlan", e);
+            return "{\"linear\":false}";
+        }
+        String tenantId = OloConfig.normalizeTenantId(
+                workflowInput.getContext() != null ? workflowInput.getContext().getTenantId() : null);
+        if (!allowedTenantIds.isEmpty() && !allowedTenantIds.contains(tenantId)) {
+            throw new IllegalArgumentException("Unknown tenant: " + tenantId);
+        }
+        String effectiveQueue = queueName;
+        if (effectiveQueue == null || !effectiveQueue.endsWith("-debug")) {
+            try {
+                String taskQueue = Activity.getExecutionContext().getInfo().getActivityTaskQueue();
+                if (taskQueue != null && taskQueue.endsWith("-debug")) effectiveQueue = taskQueue;
+            } catch (Exception ignored) { }
+        }
+        String requestedVersion = workflowInput.getRouting() != null ? workflowInput.getRouting().getConfigVersion() : null;
+        if (requestedVersion != null && requestedVersion.isBlank()) requestedVersion = null;
+        else if (requestedVersion != null) requestedVersion = requestedVersion.trim();
+        String defaultTenantId = OloConfig.normalizeTenantId(null);
+        LocalContext localContext = LocalContext.forQueue(tenantId, effectiveQueue, requestedVersion);
+        if (localContext == null && !defaultTenantId.equals(tenantId)) {
+            localContext = LocalContext.forQueue(defaultTenantId, effectiveQueue, requestedVersion);
+        }
+        if (localContext == null) {
+            try {
+                String taskQueue = Activity.getExecutionContext().getInfo().getActivityTaskQueue();
+                if (taskQueue != null) {
+                    localContext = LocalContext.forQueue(tenantId, taskQueue, requestedVersion);
+                    if (localContext == null && !defaultTenantId.equals(tenantId)) {
+                        localContext = LocalContext.forQueue(defaultTenantId, taskQueue, requestedVersion);
+                    }
+                    if (localContext != null) effectiveQueue = taskQueue;
+                }
+            } catch (Exception ignored) { }
+        }
+        if (localContext == null) {
+            log.warn("No LocalContext for getExecutionPlan");
+            return "{\"linear\":false}";
+        }
+        PipelineConfiguration config = localContext.getPipelineConfiguration();
+        if (config == null || config.getPipelines() == null || config.getPipelines().isEmpty()) {
+            return "{\"linear\":false}";
+        }
+        PipelineDefinition pipeline = config.getPipelines().values().iterator().next();
+        if (pipeline.getExecutionTree() == null) {
+            return "{\"linear\":false}";
+        }
+        List<ExecutionPlanBuilder.PlanEntry> plan = ExecutionPlanBuilder.buildLinearPlan(pipeline.getExecutionTree());
+        ExecutionPlanBuilder.PlanWithParallelResult parallelResult = null;
+        if (plan == null || plan.isEmpty()) {
+            parallelResult = ExecutionPlanBuilder.buildPlanWithParallel(pipeline.getExecutionTree());
+            if (parallelResult == null || parallelResult.getSteps().isEmpty()) {
+                return "{\"linear\":false}";
+            }
+        }
+        try {
+            Map<String, Object> inputValues = new LinkedHashMap<>();
+            for (com.olo.input.model.InputItem item : workflowInput.getInputs()) {
+                if (item != null && item.getName() != null) {
+                    inputValues.put(item.getName(), item.getValue() != null ? item.getValue() : "");
+                }
+            }
+            VariableEngine initialEngine = new VariableEngine(pipeline, inputValues);
+            String initialVariableMapJson = MAPPER.writeValueAsString(initialEngine.getExportMap());
+
+            Map<String, Object> out = new LinkedHashMap<>();
+            out.put("linear", true);
+            out.put("configJson", MAPPER.writeValueAsString(config));
+            out.put("pipelineName", pipeline.getName());
+            out.put("queueName", effectiveQueue);
+            out.put("workflowInputJson", workflowInputJson);
+            out.put("initialVariableMapJson", initialVariableMapJson);
+            if (parallelResult != null) {
+                List<List<Map<String, Object>>> stepsData = new ArrayList<>();
+                ExecutionTreeNode treeRoot = pipeline.getExecutionTree();
+                for (List<ExecutionPlanBuilder.PlanEntry> step : parallelResult.getSteps()) {
+                    List<Map<String, Object>> stepNodes = new ArrayList<>();
+                    for (ExecutionPlanBuilder.PlanEntry e : step) {
+                        ExecutionTreeNode node = ExecutionTreeNode.findNodeById(treeRoot, e.getNodeId());
+                        List<String> outputVars = node == null || node.getOutputMappings() == null
+                                ? List.of()
+                                : node.getOutputMappings().stream()
+                                        .map(ParameterMapping::getVariable)
+                                        .filter(Objects::nonNull)
+                                        .toList();
+                        Map<String, Object> nodeData = new LinkedHashMap<>();
+                        nodeData.put("activityType", e.getActivityType());
+                        nodeData.put("nodeId", e.getNodeId());
+                        nodeData.put("outputVariables", outputVars);
+                        stepNodes.add(nodeData);
+                    }
+                    stepsData.add(stepNodes);
+                }
+                out.put("steps", stepsData);
+                if (parallelResult.getTryCatchCatchStepIndex() != null && parallelResult.getTryCatchCatchStepIndex() >= 0) {
+                    Map<String, Object> tryCatchMeta = new LinkedHashMap<>();
+                    tryCatchMeta.put("catchStepIndex", parallelResult.getTryCatchCatchStepIndex());
+                    if (parallelResult.getTryCatchErrorVariable() != null) {
+                        tryCatchMeta.put("errorVariable", parallelResult.getTryCatchErrorVariable());
+                    }
+                    out.put("tryCatch", tryCatchMeta);
+                }
+            } else {
+                List<Map<String, String>> nodes = new ArrayList<>();
+                for (ExecutionPlanBuilder.PlanEntry e : plan) {
+                    nodes.add(Map.of("activityType", e.getActivityType(), "nodeId", e.getNodeId()));
+                }
+                out.put("nodes", nodes);
+            }
+            return MAPPER.writeValueAsString(out);
+        } catch (Exception e) {
+            log.warn("Failed to serialize execution plan", e);
+            return "{\"linear\":false}";
+        }
+    }
+
+    @Override
+    public String applyResultMapping(String planJson, String variableMapJson) {
+        if (planJson == null || variableMapJson == null) return "";
+        try {
+            Map<String, Object> plan = MAPPER.readValue(planJson, MAP_TYPE);
+            if (!Boolean.TRUE.equals(plan.get("linear"))) return "";
+            String configJson = (String) plan.get("configJson");
+            String pipelineName = (String) plan.get("pipelineName");
+            if (configJson == null || pipelineName == null) return "";
+            PipelineConfiguration config = MAPPER.readValue(configJson, PipelineConfiguration.class);
+            PipelineDefinition pipeline = config.getPipelines() != null ? config.getPipelines().get(pipelineName) : null;
+            if (pipeline == null) return "";
+            Map<String, Object> variableMap = MAPPER.readValue(variableMapJson, MAP_TYPE);
+            return ResultMapper.applyFromMap(pipeline, variableMap);
+        } catch (Exception e) {
+            log.warn("applyResultMapping failed", e);
+            return "";
+        }
+    }
+
+    @Override
+    public String executeNode(String activityType, String planJson, String nodeId, String variableMapJson,
+                              String queueName, String workflowInputJson) {
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("planJson", planJson);
+        payload.put("nodeId", nodeId);
+        payload.put("variableMapJson", variableMapJson);
+        payload.put("queueName", queueName != null ? queueName : "");
+        payload.put("workflowInputJson", workflowInputJson);
+        try {
+            return executeNode(MAPPER.writeValueAsString(payload));
+        } catch (Exception e) {
+            throw new RuntimeException("Failed to build executeNode payload", e);
+        }
+    }
+
+    /**
+     * Executes a single node (payload JSON). Used by {@link #executeNode(String, String, String, String, String, String)}.
+     */
+    private String executeNode(String payloadJson) {
+        Map<String, Object> payload;
+        try {
+            payload = MAPPER.readValue(payloadJson, MAP_TYPE);
+        } catch (Exception e) {
+            throw new IllegalArgumentException("Invalid executeNode payload: " + e.getMessage(), e);
+        }
+        String planJson = (String) payload.get("planJson");
+        String nodeId = (String) payload.get("nodeId");
+        String variableMapJson = (String) payload.get("variableMapJson");
+        String queueName = payload.get("queueName") != null ? payload.get("queueName").toString() : "";
+        String workflowInputJson = (String) payload.get("workflowInputJson");
+        if (planJson == null || nodeId == null || variableMapJson == null || workflowInputJson == null) {
+            throw new IllegalArgumentException("executeNode payload missing planJson, nodeId, variableMapJson or workflowInputJson");
+        }
+        WorkflowInput workflowInput = WorkflowInput.fromJson(workflowInputJson);
+        String tenantId = OloConfig.normalizeTenantId(
+                workflowInput.getContext() != null ? workflowInput.getContext().getTenantId() : null);
+        if (!allowedTenantIds.isEmpty() && !allowedTenantIds.contains(tenantId)) {
+            throw new IllegalArgumentException("Unknown tenant: " + tenantId);
+        }
+        Map<String, Object> plan;
+        try {
+            plan = MAPPER.readValue(planJson, MAP_TYPE);
+        } catch (Exception e) {
+            throw new IllegalArgumentException("Invalid planJson: " + e.getMessage(), e);
+        }
+        String configJson = (String) plan.get("configJson");
+        String pipelineName = (String) plan.get("pipelineName");
+        if (configJson == null || pipelineName == null) {
+            throw new IllegalArgumentException("planJson missing configJson or pipelineName");
+        }
+        PipelineConfiguration config;
+        try {
+            config = MAPPER.readValue(configJson, PipelineConfiguration.class);
+        } catch (com.fasterxml.jackson.core.JsonProcessingException e) {
+            throw new IllegalArgumentException("Invalid configJson: " + e.getMessage(), e);
+        }
+        PipelineDefinition pipeline = config.getPipelines() != null ? config.getPipelines().get(pipelineName) : null;
+        if (pipeline == null || pipeline.getExecutionTree() == null) {
+            throw new IllegalArgumentException("Pipeline or execution tree not found");
+        }
+        ExecutionTreeNode node = ExecutionTreeNode.findNodeById(pipeline.getExecutionTree(), nodeId);
+        if (node == null) {
+            throw new IllegalArgumentException("Node not found: " + nodeId);
+        }
+        Map<String, Object> variableMap;
+        try {
+            variableMap = MAPPER.readValue(variableMapJson, MAP_TYPE);
+        } catch (Exception e) {
+            throw new IllegalArgumentException("Invalid variableMapJson: " + e.getMessage(), e);
+        }
+        VariableEngine variableEngine = VariableEngine.fromVariableMap(pipeline, variableMap);
+        java.util.Map<String, ExecutablePlugin> nodeInstanceCache = new LinkedHashMap<>();
+        PluginInvoker pluginInvoker = new PluginInvoker(pluginExecutor(tenantId, nodeInstanceCache));
+        NodeExecutor nodeExecutor = new NodeExecutor(
+                pluginInvoker, config, pipeline.getExecutionType(), null, tenantId,
+                TenantConfigRegistry.getInstance().get(tenantId).getConfigMap(), null);
+        nodeExecutor.executeSingleNode(node, pipeline, variableEngine, queueName);
+        try {
+            return MAPPER.writeValueAsString(variableEngine.getExportMap());
+        } catch (Exception e) {
+            throw new RuntimeException("Failed to serialize variable map", e);
+        }
+    }
+
+    @Override
     public String runExecutionTree(String queueName, String workflowInputJson) {
         WorkflowInput workflowInput;
         try {
@@ -130,6 +385,9 @@ public class OloKernelActivitiesImpl implements OloKernelActivities {
         }
         String tenantId = OloConfig.normalizeTenantId(
                 workflowInput.getContext() != null ? workflowInput.getContext().getTenantId() : null);
+        String effectiveQueueForLog = queueName != null ? queueName : "";
+        log.info("RunExecutionTree activity started | invoked from workflow | queue={} | tenantId={}",
+                effectiveQueueForLog, tenantId);
         if (!allowedTenantIds.isEmpty() && !allowedTenantIds.contains(tenantId)) {
             throw new IllegalArgumentException("Unknown tenant: " + tenantId);
         }
@@ -187,6 +445,16 @@ public class OloKernelActivitiesImpl implements OloKernelActivities {
                 return "";
             }
             String snapshotVersionId = requestedVersion != null ? requestedVersion : (config.getVersion() != null ? config.getVersion() : "");
+            PipelineDefinition pipeline = config.getPipelines().values().iterator().next();
+            ExecutionTreeNode rootNode = pipeline.getExecutionTree();
+            String pipelineName = pipeline.getName();
+            String executionMode = pipeline.getExecutionType() != null ? pipeline.getExecutionType().name() : "SYNC";
+            String rootNodeId = rootNode != null ? rootNode.getId() : null;
+            String rootNodeType = rootNode != null && rootNode.getType() != null ? rootNode.getType().name() : null;
+            String rootNodeDisplayName = rootNode != null ? rootNode.getDisplayName() : null;
+            String transactionId = workflowInput.getRouting() != null ? workflowInput.getRouting().getTransactionId() : null;
+            log.info("OloKernel runExecutionTree | transactionId={} | pipelineName={} | executionMode={} | queue={} | tenantId={} | rootNodeId={} | rootNodeType={} | rootNodeDisplayName={} | configVersion={}",
+                    transactionId, pipelineName, executionMode, effectiveQueue, tenantId, rootNodeId, rootNodeType, rootNodeDisplayName, snapshotVersionId);
             String runId = runLedger != null ? UUID.randomUUID().toString() : null;
             ExecutionConfigSnapshot snapshot = runId != null
                     ? ExecutionConfigSnapshot.of(tenantId, effectiveQueue, config, snapshotVersionId, runId)
@@ -198,6 +466,9 @@ public class OloKernelActivitiesImpl implements OloKernelActivities {
                 }
             }
             Map<String, Object> tenantConfigMap = TenantConfigRegistry.getInstance().get(tenantId).getConfigMap();
+
+            // Per-node plugin instance cache: one instance per tree node; same node in a loop reuses the same instance.
+            java.util.Map<String, ExecutablePlugin> nodeInstanceCache = new LinkedHashMap<>();
 
             long ledgerStartTime = 0L;
             if (runLedger != null && runId != null) {
@@ -211,7 +482,7 @@ public class OloKernelActivitiesImpl implements OloKernelActivities {
             String runStatus = "FAILED";
             Throwable runFailure = null;
             try {
-                runResult = ExecutionEngine.run(snapshot, inputValues, pluginExecutor(tenantId), tenantConfigMap);
+                runResult = ExecutionEngine.run(snapshot, inputValues, pluginExecutor(tenantId, nodeInstanceCache), tenantConfigMap);
                 runStatus = "SUCCESS";
                 return runResult != null ? runResult : "";
             } catch (IllegalArgumentException e) {
@@ -233,7 +504,7 @@ public class OloKernelActivitiesImpl implements OloKernelActivities {
                         runLedger.runEnded(runIdForEnd, endTime, runResult, runStatus, durationMs, errMsg, failureStage, null, null, "USD");
                     }
                     LedgerContext.clear();
-                    RunLevelLedgerFeature.clearForRun();
+                    InternalFeatures.clearLedgerForRun();
                 }
             }
         } finally {
@@ -270,10 +541,14 @@ public class OloKernelActivitiesImpl implements OloKernelActivities {
     }
 
     private PluginInvoker.PluginExecutor pluginExecutor(String tenantId) {
+        return pluginExecutor(tenantId, null);
+    }
+
+    private PluginInvoker.PluginExecutor pluginExecutor(String tenantId, java.util.Map<String, ExecutablePlugin> nodeInstanceCache) {
         return new PluginInvoker.PluginExecutor() {
             @Override
-            public String execute(String pluginId, String inputsJson) {
-                return OloKernelActivitiesImpl.this.executePlugin(tenantId, pluginId, inputsJson);
+            public String execute(String pluginId, String inputsJson, String nodeId) {
+                return OloKernelActivitiesImpl.this.executePlugin(tenantId, pluginId, inputsJson, nodeId, nodeInstanceCache);
             }
             @Override
             public String toJson(Map<String, Object> map) {

@@ -114,6 +114,8 @@ public final class ConfigurationLoader {
             Optional<PipelineConfiguration> cfg = parseConfig(json.get(), "Redis:" + redisKey);
             if (cfg.isPresent()) {
                 PipelineConfiguration normalized = ExecutionTreeConfig.ensureUniqueNodeIds(cfg.get());
+                normalized = ExecutionTreeConfig.resolveNodeTimeouts(normalized);
+                normalized = ExecutionTreeConfig.ensureForkRunsAsync(normalized);
                 log.info("Pipeline configuration loaded from Redis key={} for queue={} version={}", redisKey, queueName, version);
                 if (configSink != null) {
                     persistConfig(tenantKey, queueName, version, redisKey, normalized, "Redis");
@@ -127,6 +129,8 @@ public final class ConfigurationLoader {
             Optional<PipelineConfiguration> cfg = parseConfig(json.get(), "DB:" + queueName + ":" + version);
             if (cfg.isPresent()) {
                 PipelineConfiguration normalized = ExecutionTreeConfig.ensureUniqueNodeIds(cfg.get());
+                normalized = ExecutionTreeConfig.resolveNodeTimeouts(normalized);
+                normalized = ExecutionTreeConfig.ensureForkRunsAsync(normalized);
                 log.info("Pipeline configuration loaded from DB tenant={} queue={} version={}", tenantKey, queueName, version);
                 if (configSink != null) {
                     persistConfig(tenantKey, queueName, version, redisKey, normalized, "DB");
@@ -159,6 +163,8 @@ public final class ConfigurationLoader {
         Optional<PipelineConfiguration> cfg = parseConfig(json.get(), "file:" + fileName);
         if (cfg.isEmpty()) return Optional.empty();
         PipelineConfiguration normalized = ExecutionTreeConfig.ensureUniqueNodeIds(cfg.get());
+        normalized = ExecutionTreeConfig.resolveNodeTimeouts(normalized);
+        normalized = ExecutionTreeConfig.ensureForkRunsAsync(normalized);
         Path filePath = configDir != null ? configDir.resolve(fileName) : Path.of(fileName);
         log.info("Pipeline configuration loaded from file: {}{} for tenant={} queue={} version={}", filePath, logSuffix, tenantKey, queueName, version);
         if (configSink != null) {

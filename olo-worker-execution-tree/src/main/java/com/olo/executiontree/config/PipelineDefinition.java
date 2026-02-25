@@ -6,10 +6,13 @@ import com.olo.executiontree.inputcontract.InputContract;
 import com.olo.executiontree.outputcontract.OutputContract;
 import com.olo.executiontree.outputcontract.ResultMapping;
 import com.olo.executiontree.scope.Scope;
+import com.olo.executiontree.defaults.ActivityDefaultTimeouts;
 import com.olo.executiontree.tree.ExecutionTreeNode;
 import com.olo.executiontree.variableregistry.VariableRegistryEntry;
 
+import java.util.Collections;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 
 /**
@@ -29,6 +32,7 @@ public final class PipelineDefinition {
     private final OutputContract outputContract;
     private final List<ResultMapping> resultMapping;
     private final ExecutionType executionType;
+    private final Map<String, ActivityDefaultTimeouts> resolvedNodeTimeouts;
 
     @JsonCreator
     public PipelineDefinition(
@@ -40,7 +44,8 @@ public final class PipelineDefinition {
             @JsonProperty("executionTree") ExecutionTreeNode executionTree,
             @JsonProperty("outputContract") OutputContract outputContract,
             @JsonProperty("resultMapping") List<ResultMapping> resultMapping,
-            @JsonProperty("executionType") ExecutionType executionType) {
+            @JsonProperty("executionType") ExecutionType executionType,
+            @JsonProperty("resolvedNodeTimeouts") Map<String, ActivityDefaultTimeouts> resolvedNodeTimeouts) {
         this.name = name;
         this.workflowId = workflowId;
         this.inputContract = inputContract;
@@ -50,6 +55,21 @@ public final class PipelineDefinition {
         this.outputContract = outputContract;
         this.resultMapping = resultMapping != null ? List.copyOf(resultMapping) : List.of();
         this.executionType = executionType != null ? executionType : ExecutionType.SYNC;
+        this.resolvedNodeTimeouts = resolvedNodeTimeouts != null ? Collections.unmodifiableMap(resolvedNodeTimeouts) : null;
+    }
+
+    /** Constructor for JSON deserialization when resolvedNodeTimeouts is not present. */
+    public PipelineDefinition(
+            String name,
+            String workflowId,
+            InputContract inputContract,
+            List<VariableRegistryEntry> variableRegistry,
+            Scope scope,
+            ExecutionTreeNode executionTree,
+            OutputContract outputContract,
+            List<ResultMapping> resultMapping,
+            ExecutionType executionType) {
+        this(name, workflowId, inputContract, variableRegistry, scope, executionTree, outputContract, resultMapping, executionType, null);
     }
 
     /** Pipeline name (used as key in the pipelines map). */
@@ -92,11 +112,32 @@ public final class PipelineDefinition {
         return executionType;
     }
 
+    /** Resolved activity timeouts per node id (current → parent → global), resolved at bootstrap. Null until resolved. */
+    public Map<String, ActivityDefaultTimeouts> getResolvedNodeTimeouts() {
+        return resolvedNodeTimeouts;
+    }
+
     /** Returns a new pipeline definition with the given execution tree (e.g. after ensuring unique node ids). */
     public PipelineDefinition withExecutionTree(ExecutionTreeNode executionTree) {
         return new PipelineDefinition(
                 name, workflowId, inputContract, variableRegistry, scope,
-                executionTree, outputContract, resultMapping, executionType);
+                executionTree, outputContract, resultMapping, executionType, resolvedNodeTimeouts);
+    }
+
+    /** Returns a new pipeline definition with resolved node timeouts (set at bootstrap). */
+    public PipelineDefinition withResolvedNodeTimeouts(Map<String, ActivityDefaultTimeouts> resolvedNodeTimeouts) {
+        return new PipelineDefinition(
+                name, workflowId, inputContract, variableRegistry, scope,
+                executionTree, outputContract, resultMapping, executionType, resolvedNodeTimeouts);
+    }
+
+    /** Returns a new pipeline definition with the given execution type (e.g. ASYNC when tree contains FORK). */
+    public PipelineDefinition withExecutionType(ExecutionType executionType) {
+        return new PipelineDefinition(
+                name, workflowId, inputContract, variableRegistry, scope,
+                executionTree, outputContract, resultMapping,
+                executionType != null ? executionType : ExecutionType.SYNC,
+                resolvedNodeTimeouts);
     }
 
     @Override
@@ -111,12 +152,13 @@ public final class PipelineDefinition {
                 && Objects.equals(executionTree, that.executionTree)
                 && Objects.equals(outputContract, that.outputContract)
                 && Objects.equals(resultMapping, that.resultMapping)
-                && executionType == that.executionType;
+                && executionType == that.executionType
+                && Objects.equals(resolvedNodeTimeouts, that.resolvedNodeTimeouts);
     }
 
     @Override
     public int hashCode() {
         return Objects.hash(name, workflowId, inputContract, variableRegistry, scope, executionTree,
-                outputContract, resultMapping, executionType);
+                outputContract, resultMapping, executionType, resolvedNodeTimeouts);
     }
 }

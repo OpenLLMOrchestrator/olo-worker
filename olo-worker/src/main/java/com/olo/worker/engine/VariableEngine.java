@@ -5,6 +5,7 @@ import com.olo.executiontree.inputcontract.InputContract;
 import com.olo.executiontree.variableregistry.VariableRegistryEntry;
 import com.olo.executiontree.variableregistry.VariableScope;
 
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -61,8 +62,52 @@ public final class VariableEngine {
         }
     }
 
+    /**
+     * Builds a variable engine from an existing variable map (e.g. from a previous execution step).
+     * Copies existing keys and ensures all pipeline registry variables exist (with null if missing)
+     * so that getExportMap() returns a consistent set of keys and merging parallel activity results
+     * does not drop variables that one branch did not write.
+     */
+    public static VariableEngine fromVariableMap(PipelineDefinition pipeline, Map<String, Object> existingVariableMap) {
+        Objects.requireNonNull(pipeline, "pipeline");
+        ConcurrentHashMap<String, Object> map = new ConcurrentHashMap<>();
+        List<VariableRegistryEntry> registry = pipeline.getVariableRegistry();
+        if (registry != null) {
+            for (VariableRegistryEntry entry : registry) {
+                String name = entry.getName();
+                if (name == null) continue;
+                Object v = existingVariableMap != null ? existingVariableMap.get(name) : null;
+                map.put(name, v == null ? NULL : v);
+            }
+        }
+        if (existingVariableMap != null) {
+            for (Map.Entry<String, Object> e : existingVariableMap.entrySet()) {
+                if (e.getKey() != null && !map.containsKey(e.getKey())) {
+                    Object v = e.getValue();
+                    map.put(e.getKey(), v == null ? NULL : v);
+                }
+            }
+        }
+        return new VariableEngine(pipeline, map);
+    }
+
+    /** Private constructor for fromVariableMap; backing map already has NULL sentinel. */
+    private VariableEngine(PipelineDefinition pipeline, ConcurrentHashMap<String, Object> backingMap) {
+        Objects.requireNonNull(pipeline, "pipeline");
+        this.variableMap = backingMap != null ? backingMap : new ConcurrentHashMap<>();
+    }
+
     public Map<String, Object> getVariableMap() {
         return variableMap;
+    }
+
+    /** Returns a map suitable for JSON serialization (NULL sentinel converted to null). Uses LinkedHashMap so null values are allowed. */
+    public Map<String, Object> getExportMap() {
+        Map<String, Object> out = new LinkedHashMap<>();
+        for (Map.Entry<String, Object> e : variableMap.entrySet()) {
+            out.put(e.getKey(), e.getValue() == NULL ? null : e.getValue());
+        }
+        return out;
     }
 
     public Object get(String name) {

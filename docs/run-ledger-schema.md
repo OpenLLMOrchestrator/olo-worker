@@ -4,106 +4,44 @@ When `OLO_RUN_LEDGER=true`, the worker persists run and node records to the data
 
 **Bootstrap:** The worker runs the schema SQL at startup so tables and indexes are created if they do not exist. The script is `olo-run-ledger/src/main/resources/schema/olo-ledger.sql` (classpath resource `schema/olo-ledger.sql`). It is executed once by `JdbcLedgerStore.ensureSchema()` when the ledger is enabled.
 
-## PostgreSQL (full schema)
+## PostgreSQL (current schema)
 
-```sql
--- Run-level record: one row per execution run.
--- Config snapshot (config_version, snapshot_version_id, plugin_versions) is in olo_config only; no duplication.
-CREATE TABLE IF NOT EXISTS olo_run (
-    run_id                  UUID PRIMARY KEY,
-    tenant_id               VARCHAR(255) NOT NULL,
-    pipeline                VARCHAR(255) NOT NULL,
-    pipeline_checksum       VARCHAR(128),
-    execution_engine_version VARCHAR(64),
-    input_json              JSONB,
-    start_time              TIMESTAMPTZ NOT NULL,
-    end_time                TIMESTAMPTZ,
-    final_output            TEXT,
-    status                  VARCHAR(32) NOT NULL DEFAULT 'RUNNING',
-    total_nodes             INT,
-    total_cost              DECIMAL(10,6),
-    total_tokens            INT,
-    duration_ms             BIGINT
-);
+The canonical schema is in **`olo-run-ledger/src/main/resources/schema/olo-ledger.sql`**. Summary:
 
--- Node-level record: one row per node execution. tenant_id denormalized for ultra-fast analytics without join.
-CREATE TABLE IF NOT EXISTS olo_run_node (
-    run_id                  UUID NOT NULL,
-    tenant_id               VARCHAR(255) NOT NULL,
-    node_id                 VARCHAR(255) NOT NULL,
-    node_type               VARCHAR(64) NOT NULL,
-    input_snapshot          JSONB,
-    start_time              TIMESTAMPTZ NOT NULL,
-    output_snapshot         JSONB,
-    end_time                TIMESTAMPTZ,
-    status                  VARCHAR(32) NOT NULL,
-    error_message           TEXT,
-    token_input_count       INT,
-    token_output_count      INT,
-    estimated_cost          DECIMAL(10,6),
-    model_name              VARCHAR(128),
-    provider                VARCHAR(64),
-    prompt_hash             VARCHAR(128),
-    model_config_json       JSONB,
-    tool_calls_json         JSONB,
-    external_payload_ref    VARCHAR(512),
-    retry_count             INT,
-    execution_stage         VARCHAR(64),
-    failure_type            VARCHAR(128),
-    PRIMARY KEY (run_id, node_id),
-    FOREIGN KEY (run_id) REFERENCES olo_run(run_id) ON DELETE CASCADE
-);
+- **olo_run** — One row per execution run. **run_id** (UUID PK), **tenant_id** (UUID NOT NULL), pipeline, input_json (JSONB), **start_time** / **end_time** (TIMESTAMPTZ), status, total_nodes, total_cost, total_tokens, duration_ms, error_message, failure_stage, total_prompt_tokens, total_completion_tokens, currency. Config snapshot fields (config_version, snapshot_version_id, plugin_versions) are **not** on olo_run; they live in **olo_config** only.
+- **olo_run_node** — One row per node execution. **run_id** (UUID), **tenant_id** (UUID, nullable for backward compat when not provided), **node_id** (UUID), node_type, input_snapshot/output_snapshot (JSONB), start_time/end_time (TIMESTAMPTZ), status, error_code, error_message, error_details (JSONB), token/cost columns, model_name, provider, replay columns (prompt_hash, model_config_json, tool_calls_json, temperature, top_p, provider_request_id), retry columns (retry_count, attempt, max_attempts, backoff_ms), execution_stage, failure_type, **parent_node_id** (UUID), execution_order, depth. PK (run_id, node_id); FK run_id → olo_run ON DELETE CASCADE.
+- **olo_config** — Immutable config snapshot per run. **run_id** (UUID PK, FK → olo_run), **tenant_id** (UUID NOT NULL), pipeline, config_version, snapshot_version_id, plugin_versions, created_at (TIMESTAMPTZ). Written once at run start by `JdbcLedgerStore.configRecorded()` (called from `runStarted()`).
 
--- Indexes for production: dashboards, filters, running workflows, failed nodes, AI steps.
-CREATE INDEX IF NOT EXISTS idx_olo_run_tenant_start ON olo_run(tenant_id, start_time);
-CREATE INDEX IF NOT EXISTS idx_olo_run_tenant_pipeline_start ON olo_run(tenant_id, pipeline, start_time DESC);
-CREATE INDEX IF NOT EXISTS idx_olo_run_status ON olo_run(status);
-CREATE INDEX IF NOT EXISTS idx_olo_run_pipeline ON olo_run(pipeline);
-CREATE INDEX IF NOT EXISTS idx_olo_run_node_run ON olo_run_node(run_id);
-CREATE INDEX IF NOT EXISTS idx_olo_run_node_tenant ON olo_run_node(tenant_id);
-CREATE INDEX IF NOT EXISTS idx_olo_run_node_status ON olo_run_node(status);
-CREATE INDEX IF NOT EXISTS idx_olo_run_node_type ON olo_run_node(node_type);
+**Indexes:** idx_olo_run_tenant_start, idx_olo_run_tenant_pipeline_start, idx_olo_run_status, idx_olo_run_pipeline; idx_olo_run_node_run, idx_olo_run_node_tenant, idx_olo_run_node_status, idx_olo_run_node_type, idx_olo_run_node_parent; idx_olo_config_tenant_pipeline.
 
--- Optional: index JSON path for multi-tenant analytics (e.g. filter by userId in input).
--- CREATE INDEX idx_olo_run_input_user ON olo_run ((input_json->>'userId'));
-```
+**Java:** `JdbcLedgerStore` binds UUID columns via `setObject(..., parseUuid(...))`; null/blank tenant or parent_node_id are bound as null where the schema allows.
 
 ## Migrations from previous schema
 
-If you already have `olo_run` / `olo_run_node` with TEXT columns, add new columns and alter types:
+If you already have `olo_run` / `olo_run_node` with VARCHAR or missing columns/tables:
 
 ```sql
--- Add new columns to olo_run
-ALTER TABLE olo_run ADD COLUMN IF NOT EXISTS pipeline_checksum VARCHAR(128);
-ALTER TABLE olo_run ADD COLUMN IF NOT EXISTS execution_engine_version VARCHAR(64);
-ALTER TABLE olo_run ADD COLUMN IF NOT EXISTS total_nodes INT;
-ALTER TABLE olo_run ADD COLUMN IF NOT EXISTS total_cost DECIMAL(10,6);
-ALTER TABLE olo_run ADD COLUMN IF NOT EXISTS total_tokens INT;
-ALTER TABLE olo_run ADD COLUMN IF NOT EXISTS duration_ms BIGINT;
--- Optionally migrate to JSONB: ALTER TABLE olo_run ALTER COLUMN input_json TYPE JSONB USING input_json::jsonb;
+-- Add olo_config if missing (config snapshot per run)
+CREATE TABLE IF NOT EXISTS olo_config (
+    run_id                  UUID PRIMARY KEY,
+    tenant_id               UUID NOT NULL,
+    pipeline                VARCHAR(255) NOT NULL,
+    config_version          VARCHAR(64),
+    snapshot_version_id     VARCHAR(64),
+    plugin_versions         TEXT,
+    created_at              TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (run_id) REFERENCES olo_run(run_id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_olo_config_tenant_pipeline ON olo_config(tenant_id, pipeline);
 
--- Add new columns to olo_run_node
-ALTER TABLE olo_run_node ADD COLUMN IF NOT EXISTS token_input_count INT;
-ALTER TABLE olo_run_node ADD COLUMN IF NOT EXISTS token_output_count INT;
-ALTER TABLE olo_run_node ADD COLUMN IF NOT EXISTS estimated_cost DECIMAL(10,6);
-ALTER TABLE olo_run_node ADD COLUMN IF NOT EXISTS model_name VARCHAR(128);
-ALTER TABLE olo_run_node ADD COLUMN IF NOT EXISTS provider VARCHAR(64);
-ALTER TABLE olo_run_node ADD COLUMN IF NOT EXISTS prompt_hash VARCHAR(128);
-ALTER TABLE olo_run_node ADD COLUMN IF NOT EXISTS model_config_json JSONB;
-ALTER TABLE olo_run_node ADD COLUMN IF NOT EXISTS tool_calls_json JSONB;
-ALTER TABLE olo_run_node ADD COLUMN IF NOT EXISTS external_payload_ref VARCHAR(512);
-ALTER TABLE olo_run_node ADD COLUMN IF NOT EXISTS retry_count INT;
-ALTER TABLE olo_run_node ADD COLUMN IF NOT EXISTS execution_stage VARCHAR(64);
-ALTER TABLE olo_run_node ADD COLUMN IF NOT EXISTS failure_type VARCHAR(128);
-
--- Platform-ready: run-level error and token/cost breakdown
+-- Add new columns to olo_run (if not present)
 ALTER TABLE olo_run ADD COLUMN IF NOT EXISTS error_message TEXT;
 ALTER TABLE olo_run ADD COLUMN IF NOT EXISTS failure_stage VARCHAR(128);
 ALTER TABLE olo_run ADD COLUMN IF NOT EXISTS total_prompt_tokens INT;
 ALTER TABLE olo_run ADD COLUMN IF NOT EXISTS total_completion_tokens INT;
 ALTER TABLE olo_run ADD COLUMN IF NOT EXISTS currency VARCHAR(8) DEFAULT 'USD';
 
--- Platform-ready: node-level error details, cost breakdown, replay, retry, hierarchy
+-- Add new columns to olo_run_node (if not present)
 ALTER TABLE olo_run_node ADD COLUMN IF NOT EXISTS error_code VARCHAR(64);
 ALTER TABLE olo_run_node ADD COLUMN IF NOT EXISTS error_details JSONB;
 ALTER TABLE olo_run_node ADD COLUMN IF NOT EXISTS prompt_cost DECIMAL(10,6);
@@ -115,29 +53,42 @@ ALTER TABLE olo_run_node ADD COLUMN IF NOT EXISTS provider_request_id VARCHAR(25
 ALTER TABLE olo_run_node ADD COLUMN IF NOT EXISTS attempt INT;
 ALTER TABLE olo_run_node ADD COLUMN IF NOT EXISTS max_attempts INT;
 ALTER TABLE olo_run_node ADD COLUMN IF NOT EXISTS backoff_ms BIGINT;
-ALTER TABLE olo_run_node ADD COLUMN IF NOT EXISTS parent_node_id VARCHAR(255);
+ALTER TABLE olo_run_node ADD COLUMN IF NOT EXISTS execution_stage VARCHAR(64);
+ALTER TABLE olo_run_node ADD COLUMN IF NOT EXISTS failure_type VARCHAR(128);
+ALTER TABLE olo_run_node ADD COLUMN IF NOT EXISTS parent_node_id UUID;
 ALTER TABLE olo_run_node ADD COLUMN IF NOT EXISTS execution_order INT;
 ALTER TABLE olo_run_node ADD COLUMN IF NOT EXISTS depth INT;
 CREATE INDEX IF NOT EXISTS idx_olo_run_node_parent ON olo_run_node(parent_node_id);
+```
 
--- Migrate run_id from VARCHAR(255) to UUID (smaller storage, faster comparisons). Only if current type is varchar.
--- ALTER TABLE olo_run_node DROP CONSTRAINT IF EXISTS olo_run_node_run_id_fkey;
--- ALTER TABLE olo_config DROP CONSTRAINT IF EXISTS olo_config_run_id_fkey;
--- ALTER TABLE olo_run ALTER COLUMN run_id TYPE UUID USING run_id::uuid;
--- ALTER TABLE olo_run_node ALTER COLUMN run_id TYPE UUID USING run_id::uuid;
--- ALTER TABLE olo_config ALTER COLUMN run_id TYPE UUID USING run_id::uuid;
--- ALTER TABLE olo_run_node ADD CONSTRAINT olo_run_node_run_id_fkey FOREIGN KEY (run_id) REFERENCES olo_run(run_id) ON DELETE CASCADE;
--- ALTER TABLE olo_config ADD CONSTRAINT olo_config_run_id_fkey FOREIGN KEY (run_id) REFERENCES olo_run(run_id) ON DELETE CASCADE;
+**Migrating existing VARCHAR IDs to UUID** (only if current columns are varchar/text):
 
--- Migrate timestamp → timestamptz (UTC, safe for distributed workers and cross-region analytics).
--- ALTER TABLE olo_run ALTER COLUMN start_time TYPE TIMESTAMPTZ USING start_time AT TIME ZONE 'UTC';
--- ALTER TABLE olo_run ALTER COLUMN end_time TYPE TIMESTAMPTZ USING end_time AT TIME ZONE 'UTC';
--- ALTER TABLE olo_run_node ALTER COLUMN start_time TYPE TIMESTAMPTZ USING start_time AT TIME ZONE 'UTC';
--- ALTER TABLE olo_run_node ALTER COLUMN end_time TYPE TIMESTAMPTZ USING end_time AT TIME ZONE 'UTC';
--- ALTER TABLE olo_config ALTER COLUMN created_at TYPE TIMESTAMPTZ USING created_at AT TIME ZONE 'UTC';
+```sql
+-- Drop FKs that reference run_id before altering
+ALTER TABLE olo_run_node DROP CONSTRAINT IF EXISTS olo_run_node_run_id_fkey;
+ALTER TABLE olo_config DROP CONSTRAINT IF EXISTS olo_config_run_id_fkey;
+-- Convert columns
+ALTER TABLE olo_run ALTER COLUMN run_id TYPE UUID USING run_id::uuid;
+ALTER TABLE olo_run ALTER COLUMN tenant_id TYPE UUID USING tenant_id::uuid;
+ALTER TABLE olo_run_node ALTER COLUMN run_id TYPE UUID USING run_id::uuid;
+ALTER TABLE olo_run_node ALTER COLUMN tenant_id TYPE UUID USING NULLIF(trim(tenant_id), '')::uuid;
+ALTER TABLE olo_run_node ALTER COLUMN node_id TYPE UUID USING node_id::uuid;
+ALTER TABLE olo_run_node ALTER COLUMN parent_node_id TYPE UUID USING NULLIF(trim(parent_node_id), '')::uuid;
+ALTER TABLE olo_config ALTER COLUMN run_id TYPE UUID USING run_id::uuid;
+ALTER TABLE olo_config ALTER COLUMN tenant_id TYPE UUID USING tenant_id::uuid;
+-- Re-add FKs
+ALTER TABLE olo_run_node ADD CONSTRAINT olo_run_node_run_id_fkey FOREIGN KEY (run_id) REFERENCES olo_run(run_id) ON DELETE CASCADE;
+ALTER TABLE olo_config ADD CONSTRAINT olo_config_run_id_fkey FOREIGN KEY (run_id) REFERENCES olo_run(run_id) ON DELETE CASCADE;
+```
 
--- Tenant + pipeline + time range queries.
--- CREATE INDEX IF NOT EXISTS idx_olo_run_tenant_pipeline_start ON olo_run(tenant_id, pipeline, start_time DESC);
+**Migrating timestamps to TIMESTAMPTZ** (if currently without time zone):
+
+```sql
+ALTER TABLE olo_run ALTER COLUMN start_time TYPE TIMESTAMPTZ USING start_time AT TIME ZONE 'UTC';
+ALTER TABLE olo_run ALTER COLUMN end_time TYPE TIMESTAMPTZ USING end_time AT TIME ZONE 'UTC';
+ALTER TABLE olo_run_node ALTER COLUMN start_time TYPE TIMESTAMPTZ USING start_time AT TIME ZONE 'UTC';
+ALTER TABLE olo_run_node ALTER COLUMN end_time TYPE TIMESTAMPTZ USING end_time AT TIME ZONE 'UTC';
+ALTER TABLE olo_config ALTER COLUMN created_at TYPE TIMESTAMPTZ USING created_at AT TIME ZONE 'UTC';
 ```
 
 ## Partitioning (future-proofing)
@@ -148,7 +99,6 @@ For high volume, partition by time to avoid table bloat and vacuum pressure:
 -- Example: monthly range partitioning (PostgreSQL 10+)
 -- CREATE TABLE olo_run (...) PARTITION BY RANGE (start_time);
 -- CREATE TABLE olo_run_2026_02 PARTITION OF olo_run FOR VALUES FROM ('2026-02-01') TO ('2026-03-01');
--- CREATE TABLE olo_run_2026_03 PARTITION OF olo_run FOR VALUES FROM ('2026-03-01') TO ('2026-04-01');
 ```
 
 ## Environment
@@ -156,10 +106,19 @@ For high volume, partition by time to avoid table bloat and vacuum pressure:
 - `OLO_RUN_LEDGER` — set to `true` to enable run ledger.
 - `OLO_DB_HOST`, `OLO_DB_PORT`, `OLO_DB_NAME`, `OLO_DB_USER`, `OLO_DB_PASSWORD` — ledger DB connection.
 
+## Audit persistence of plugin version
+
+**olo_config.plugin_versions** is the **audit record** of which plugin versions were in use for the run. It is written once at run start when the ledger records the config snapshot and is **immutable** for the life of the run.
+
+- **Format**: JSON object (TEXT). Keys = plugin ids (every `pluginRef` used in the execution tree for that run); values = contract version from the registry (e.g. `"1.0"`) or `"?"` if unknown. Example: `{"GPT4_EXECUTOR":"1.0","QDRANT_VECTOR_STORE":"1.0"}`.
+- **Source**: Built at run start by collecting all plugin refs from the pipeline’s execution tree and resolving each via `PluginRegistry.getContractVersion(tenantId, pluginId)`. Stored in **olo_config** only (not on olo_run or olo_run_node).
+- **Use**: Audit and compliance (which plugin versions ran), debugging, and compatibility analysis. Query by run_id via olo_config to see the exact plugin versions for that run.
+
 ## Design
 
-- **AI cost**: MODEL/PLANNER nodes get `token_input_count`, `token_output_count`, `estimated_cost`, `model_name`, `provider` from plugin output (e.g. Ollama response).
-- **Run aggregations**: `total_nodes`, `total_cost`, `total_tokens`, `duration_ms` set on run end (computed from node rows / activity).
-- **Replay**: `prompt_hash`, `model_config_json`, `tool_calls_json`, `external_payload_ref` support deterministic replay; large payloads in object storage.
-- **Failure intelligence**: `retry_count`, `execution_stage`, `failure_type` for reliability analytics.
-- **Snapshot versioning**: `pipeline_checksum`, `execution_engine_version` for compliance-grade audit.
+- **AI cost**: MODEL/PLANNER nodes get token_input_count, token_output_count, estimated_cost, prompt_cost, completion_cost, total_cost, model_name, provider from plugin output.
+- **Run aggregations**: total_nodes, total_cost, total_tokens, duration_ms, error_message, failure_stage, total_prompt_tokens, total_completion_tokens, currency set on run end.
+- **Config snapshot**: Stored only in olo_config (run_id, tenant_id, pipeline, config_version, snapshot_version_id, plugin_versions); no duplication on olo_run.
+- **Replay**: prompt_hash, model_config_json, tool_calls_json, external_payload_ref, temperature, top_p, provider_request_id support deterministic replay.
+- **Failure intelligence**: error_code, error_message, error_details, retry_count, attempt, max_attempts, backoff_ms, execution_stage, failure_type for reliability analytics.
+- **Hierarchy**: parent_node_id, execution_order, depth for tree reconstruction.

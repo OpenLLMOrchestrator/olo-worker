@@ -7,7 +7,9 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.SerializationFeature;
 import com.olo.executiontree.config.PipelineConfiguration;
 import com.olo.executiontree.config.PipelineDefinition;
+import com.olo.executiontree.config.ExecutionType;
 import com.olo.executiontree.tree.ExecutionTreeNode;
+import com.olo.executiontree.tree.NodeType;
 
 import java.io.IOException;
 import java.util.HashMap;
@@ -113,6 +115,51 @@ public final class ExecutionTreeConfig {
             normalized.put(e.getKey(), def.withExecutionTree(ensuredTree));
         }
         return config.withPipelines(normalized);
+    }
+
+    /**
+     * Resolves activity timeouts for every tree node: current → parent → global default.
+     * Call during bootstrap after {@link #ensureUniqueNodeIds} so each pipeline has
+     * {@link PipelineDefinition#getResolvedNodeTimeouts()} populated.
+     */
+    public static PipelineConfiguration resolveNodeTimeouts(PipelineConfiguration config) {
+        if (config == null) return null;
+        return config.withResolvedNodeTimeouts();
+    }
+
+    /**
+     * If any pipeline's execution tree contains a FORK node, sets that pipeline's executionType to ASYNC
+     * so that at runtime FORK children run in a worker thread and JOIN runs synchronously to merge.
+     * Call during bootstrap after {@link #resolveNodeTimeouts}.
+     */
+    public static PipelineConfiguration ensureForkRunsAsync(PipelineConfiguration config) {
+        if (config == null) return null;
+        Map<String, PipelineDefinition> pipelines = config.getPipelines();
+        if (pipelines == null || pipelines.isEmpty()) return config;
+        Map<String, PipelineDefinition> updated = new HashMap<>();
+        for (Map.Entry<String, PipelineDefinition> e : pipelines.entrySet()) {
+            PipelineDefinition def = e.getValue();
+            if (def == null) {
+                updated.put(e.getKey(), null);
+                continue;
+            }
+            if (containsFork(def.getExecutionTree())) {
+                updated.put(e.getKey(), def.withExecutionType(ExecutionType.ASYNC));
+            } else {
+                updated.put(e.getKey(), def);
+            }
+        }
+        return config.withPipelines(updated);
+    }
+
+    /** Returns true if the node or any descendant has type FORK. */
+    private static boolean containsFork(ExecutionTreeNode node) {
+        if (node == null) return false;
+        if (node.getType() == NodeType.FORK) return true;
+        for (ExecutionTreeNode child : node.getChildren()) {
+            if (containsFork(child)) return true;
+        }
+        return false;
     }
 
     /**

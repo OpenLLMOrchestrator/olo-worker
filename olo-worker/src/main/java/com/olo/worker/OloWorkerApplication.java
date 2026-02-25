@@ -7,18 +7,16 @@ import com.olo.config.OloConfig;
 import com.olo.config.OloSessionCache;
 import com.olo.executiontree.config.PipelineConfiguration;
 import com.olo.features.FeatureRegistry;
-import com.olo.features.debug.DebuggerFeature;
-import com.olo.features.metrics.MetricsFeature;
-import com.olo.features.quota.QuotaContext;
-import com.olo.features.quota.QuotaFeature;
+import com.olo.internal.features.InternalFeatures;
 import com.olo.ledger.JdbcLedgerStore;
-import com.olo.ledger.NodeLedgerFeature;
 import com.olo.ledger.RunLedger;
-import com.olo.ledger.RunLevelLedgerFeature;
+import com.olo.internal.plugins.InternalPlugins;
+import com.olo.plugin.PluginManager;
+import com.olo.plugin.PluginProvider;
 import com.olo.plugin.PluginRegistry;
-import com.olo.plugin.ollama.OllamaModelExecutorPlugin;
 import com.olo.worker.config.ConfigCompatibilityValidator;
 import com.olo.worker.config.ConfigIncompatibleException;
+import com.olo.worker.activity.ExecuteNodeDynamicActivity;
 import com.olo.worker.activity.OloKernelActivitiesImpl;
 import com.olo.worker.workflow.OloKernelWorkflowImpl;
 import io.temporal.client.WorkflowClient;
@@ -53,32 +51,60 @@ public final class OloWorkerApplication {
         var config = ctx.getConfig();
         List<String> taskQueues = ctx.getTaskQueues();
 
-        // Register Ollama plugin for each tenant (e.g. MODEL_EXECUTOR / GPT4_EXECUTOR in olo-chat-queue-oolama)
-        String ollamaBaseUrl = System.getenv("OLLAMA_BASE_URL");
-        String ollamaModel = System.getenv("OLLAMA_MODEL");
-        if (ollamaModel == null || ollamaModel.isBlank()) {
-            ollamaModel = "llama3.2";
-        }
-        if (ollamaBaseUrl == null || ollamaBaseUrl.isBlank()) {
-            ollamaBaseUrl = "http://localhost:11434";
-        }
-        OllamaModelExecutorPlugin plugin = new OllamaModelExecutorPlugin(ollamaBaseUrl, ollamaModel);
         List<String> tenantIds = ctx.getTenantIds();
         if (tenantIds.isEmpty()) {
             tenantIds = List.of(OloConfig.normalizeTenantId(null));
         }
-        for (String tenantId : tenantIds) {
-            plugin.register(tenantId, "GPT4_EXECUTOR");
-        }
-        log.info("Registered Ollama model-executor plugin as GPT4_EXECUTOR for {} tenant(s) (baseUrl={}, model={})",
-                tenantIds.size(), ollamaBaseUrl, ollamaModel);
+        PluginManager pluginManager = InternalPlugins.createPluginManager();
 
-        FeatureRegistry.getInstance().register(new DebuggerFeature());
-        log.info("Registered debug feature (pre/post logs when using -debug pipeline)");
-        FeatureRegistry.getInstance().register(new QuotaFeature());
-        log.info("Registered quota feature (PRE, fail-fast on soft/hard limit from tenant config)");
-        FeatureRegistry.getInstance().register(new MetricsFeature());
-        log.info("Registered metrics feature (PRE_FINALLY, lazy MeterRegistry, olo.node.executions counter)");
+        PluginRegistry registry = PluginRegistry.getInstance();
+        int count = 0;
+        // Internal plugins: any failure (isEnabled, getPlugin, duplicate id, contract mismatch) is fatal.
+        // Register the provider (not getPlugin()) so the registry can create one instance per tree node.
+        for (PluginProvider provider : pluginManager.getInternalProviders()) {
+            if (!provider.isEnabled()) continue;
+            String id = provider.getPluginId();
+            String contractType = provider.getContractType();
+            String version = provider.getVersion();
+            Map<String, Object> capabilityMetadata = provider.getCapabilityMetadata();
+            for (String tenantId : tenantIds) {
+                registry.register(tenantId, id, contractType, version, capabilityMetadata, provider);
+            }
+            count++;
+            log.info("Registered plugin {} (contractType={}, version={}) for {} tenant(s)", id, contractType, version, tenantIds.size());
+        }
+        // Community plugins: failure is log-and-skip (unless OLO_PLUGINS_REQUIRED=true).
+        for (PluginProvider provider : pluginManager.getCommunityProviders()) {
+            try {
+                if (!provider.isEnabled()) continue;
+                String id = provider.getPluginId();
+                String contractType = provider.getContractType();
+                String version = provider.getVersion();
+                Map<String, Object> capabilityMetadata = provider.getCapabilityMetadata();
+                for (String tenantId : tenantIds) {
+                    registry.register(tenantId, id, contractType, version, capabilityMetadata, provider);
+                }
+                count++;
+                log.info("Registered plugin {} (contractType={}, version={}) for {} tenant(s)", id, contractType, version, tenantIds.size());
+            } catch (Exception e) {
+                log.error("Community plugin failed to register (skipping): pluginId={}, error={}",
+                        provider != null ? provider.getPluginId() : "?", e.getMessage(), e);
+            }
+        }
+        if (count == 0) {
+            log.warn("No plugins registered; check internal providers and OLO_PLUGINS_DIR for community JARs");
+        }
+
+        startWorker(pluginManager, ctx);
+    }
+
+    /**
+     * Starts the worker after plugins are loaded: registers features, ledger, validates config,
+     * connects to Temporal, and runs the worker loop.
+     */
+    private static void startWorker(PluginManager pluginManager, BootstrapContext ctx) {
+        var config = ctx.getConfig();
+        List<String> taskQueues = ctx.getTaskQueues();
 
         RunLedger runLedger = null;
         if (config.isRunLedgerEnabled()) {
@@ -92,14 +118,11 @@ public final class OloWorkerApplication {
                 ledgerStore = new com.olo.ledger.NoOpLedgerStore();
             }
             runLedger = new RunLedger(ledgerStore);
-            FeatureRegistry.getInstance().register(new RunLevelLedgerFeature());
-            FeatureRegistry.getInstance().register(new NodeLedgerFeature(runLedger));
-            log.info("Registered run ledger features (ledger-run on root, ledger-node on every node); OLO_RUN_LEDGER=true");
-        } else {
-            log.debug("Run ledger disabled (OLO_RUN_LEDGER=false); no ledger features registered");
         }
 
-        // Version checks (config, plugin contract, feature contract) run at bootstrap / config load
+        OloSessionCache sessionCache = new OloSessionCache(config);
+        InternalFeatures.registerInternalFeatures(FeatureRegistry.getInstance(), sessionCache, runLedger);
+
         validateAllPipelineConfigs(ctx);
 
         String temporalTarget = ctx.getTemporalTargetOrDefault("localhost:7233");
@@ -122,29 +145,23 @@ public final class OloWorkerApplication {
                 .setMaxConcurrentWorkflowTaskExecutionSize(10)
                 .build();
 
-        OloSessionCache sessionCache = new OloSessionCache(config);
-        QuotaContext.setSessionCache(sessionCache);
         List<String> tenantIdsForActivity = ctx.getTenantIds();
         if (tenantIdsForActivity.isEmpty()) {
             tenantIdsForActivity = List.of(OloConfig.normalizeTenantId(null));
         }
         OloKernelActivitiesImpl oloKernelActivities = new OloKernelActivitiesImpl(sessionCache, tenantIdsForActivity, runLedger);
+        ExecuteNodeDynamicActivity executeNodeDynamicActivity = new ExecuteNodeDynamicActivity(oloKernelActivities);
 
         List<String> workflowTypesRegistered = new ArrayList<>();
         for (String taskQueue : taskQueues) {
             Worker worker = factory.newWorker(taskQueue, workerOptions);
             worker.registerWorkflowImplementationTypes(OloKernelWorkflowImpl.class);
-            worker.registerActivitiesImplementations(oloKernelActivities);
+            worker.registerActivitiesImplementations(oloKernelActivities, executeNodeDynamicActivity);
             log.info("Registered worker for task queue: {}", taskQueue);
         }
         workflowTypesRegistered.add("OloKernelWorkflow");
 
         log.info("Task queues registered: {}", taskQueues);
-        if (workflowTypesRegistered.isEmpty()) {
-            log.info("Workflow types registered: (none - register workflow implementations in the loop above)");
-        } else {
-            log.info("Workflow types registered: {}", workflowTypesRegistered);
-        }
         log.info("Starting worker | Temporal: {} | namespace: {} | Cache: {}:{} | DB: {}:{}",
                 temporalTarget, temporalNamespace,
                 config.getCacheHost(), config.getCachePort(),

@@ -1,4 +1,4 @@
-package com.olo.worker.engine;
+package com.olo.worker.engine.node;
 
 import com.olo.executiontree.scope.FeatureDef;
 import com.olo.executiontree.scope.Scope;

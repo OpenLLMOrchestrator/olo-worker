@@ -19,6 +19,23 @@ import java.util.Set;
  *   <li>Node's {@code featureNotRequired} (excluded)</li>
  * </ul>
  * Returns separate lists for postSuccess, postError, and finally so the executor can run the right hooks on success vs exception.
+ * <p>
+ * <b>Within-phase feature order</b> (order of names in each list, first to last = execution order):
+ * <ol>
+ *   <li>Node's explicit lists (preExecution, postSuccessExecution, postErrorExecution, finallyExecution)</li>
+ *   <li>Legacy postExecution (appended to all three post lists)</li>
+ *   <li>Node's {@code features} (each feature added to its phases per registry; insertion order preserved)</li>
+ *   <li>Pipeline/scope features and queue-based (e.g. {@code -debug} → add {@code debug})</li>
+ *   <li>Node's {@code featureRequired}</li>
+ * </ol>
+ * Features in {@code featureNotRequired} are excluded. Duplicates are not added (first occurrence wins).
+ * <p>
+ * <b>Order determinism:</b>
+ * <ul>
+ *   <li><b>scope.features</b> order is preserved when adding to the resolved lists (scope iteration order).</li>
+ *   <li><b>node.features</b> order is preserved when adding (list iteration order).</li>
+ *   <li><b>Same feature in multiple sources:</b> The first source in the merge order (node explicit → legacy → node features → scope → required) wins for position. If both node.features and scope.features list the same feature, it is added when node.features is processed, so its position follows node.features order; scope does not add it again.</li>
+ * </ul>
  */
 public final class FeatureAttachmentResolver {
 

@@ -28,14 +28,27 @@ public final class FeatureRegistry {
     }
 
     /**
-     * Registers a feature instance. Reads {@link OloFeature} from the class and stores by {@link OloFeature#name()}.
-     * The instance must implement {@link PreNodeCall} and/or {@link PostNodeCall} according to phase.
+     * Registers a feature instance as <b>INTERNAL</b>. Reads {@link OloFeature} from the class and stores by {@link OloFeature#name()}.
+     * The instance must implement the contract(s) for its phase: {@link PreNodeCall} (PRE), {@link PostSuccessCall} (POST_SUCCESS),
+     * {@link PostErrorCall} (POST_ERROR), {@link FinallyCall} (FINALLY), or {@link PreFinallyCall} (PRE_FINALLY). Legacy {@link PostNodeCall}
+     * is supported as a fallback for any post phase.
      *
      * @param featureInstance object whose class is annotated with @OloFeature and implements pre/post hooks
      * @throws IllegalArgumentException if the class is not annotated with @OloFeature or name is already registered
      */
     public void register(Object featureInstance) {
+        register(featureInstance, FeaturePrivilege.INTERNAL);
+    }
+
+    /**
+     * Registers a feature instance with the given privilege.
+     *
+     * @param featureInstance object whose class is annotated with @OloFeature and implements pre/post hooks
+     * @param privilege       INTERNAL (can block) or COMMUNITY (observer-only; failures are logged)
+     */
+    public void register(Object featureInstance, FeaturePrivilege privilege) {
         Objects.requireNonNull(featureInstance, "featureInstance");
+        Objects.requireNonNull(privilege, "privilege");
         Class<?> clazz = featureInstance.getClass();
         OloFeature ann = clazz.getAnnotation(OloFeature.class);
         if (ann == null) {
@@ -51,6 +64,7 @@ public final class FeatureRegistry {
                 ann.phase(),
                 ann.applicableNodeTypes(),
                 contractVersion,
+                privilege,
                 featureInstance
         );
         if (byName.putIfAbsent(name, entry) != null) {
@@ -59,19 +73,42 @@ public final class FeatureRegistry {
     }
 
     /**
-     * Registers a feature with explicit metadata (e.g. when not using the annotation).
+     * Registers an internal (kernel-privileged) feature. Same as {@link #register(Object, FeaturePrivilege)} with {@link FeaturePrivilege#INTERNAL}.
      */
-    public void register(String name, FeaturePhase phase, String[] applicableNodeTypes, Object featureInstance) {
-        register(name, phase, applicableNodeTypes, null, featureInstance);
+    public void registerInternal(Object featureInstance) {
+        register(featureInstance, FeaturePrivilege.INTERNAL);
     }
 
-    public void register(String name, FeaturePhase phase, String[] applicableNodeTypes, String contractVersion, Object featureInstance) {
+    /**
+     * Registers a community (observer-only) feature. Same as {@link #register(Object, FeaturePrivilege)} with {@link FeaturePrivilege#COMMUNITY}.
+     * Community features must not block execution; if they throw, the executor logs and continues.
+     */
+    public void registerCommunity(Object featureInstance) {
+        register(featureInstance, FeaturePrivilege.COMMUNITY);
+    }
+
+    /**
+     * Registers a feature with explicit metadata as INTERNAL (e.g. when not using the annotation).
+     */
+    public void register(String name, FeaturePhase phase, String[] applicableNodeTypes, Object featureInstance) {
+        register(name, phase, applicableNodeTypes, null, FeaturePrivilege.INTERNAL, featureInstance);
+    }
+
+    /**
+     * Registers a feature with explicit metadata and privilege.
+     */
+    public void register(String name, FeaturePhase phase, String[] applicableNodeTypes, String contractVersion, FeaturePrivilege privilege, Object featureInstance) {
         Objects.requireNonNull(name, "name");
+        Objects.requireNonNull(privilege, "privilege");
         if (name.isBlank()) throw new IllegalArgumentException("name must be non-blank");
-        FeatureEntry entry = new FeatureEntry(name, phase != null ? phase : FeaturePhase.PRE_FINALLY, applicableNodeTypes, contractVersion, featureInstance);
+        FeatureEntry entry = new FeatureEntry(name, phase != null ? phase : FeaturePhase.PRE_FINALLY, applicableNodeTypes, contractVersion, privilege, featureInstance);
         if (byName.putIfAbsent(name, entry) != null) {
             throw new IllegalArgumentException("Feature already registered: " + name);
         }
+    }
+
+    public void register(String name, FeaturePhase phase, String[] applicableNodeTypes, String contractVersion, Object featureInstance) {
+        register(name, phase, applicableNodeTypes, contractVersion, FeaturePrivilege.INTERNAL, featureInstance);
     }
 
     /** Returns the contract version for the feature, or null if unknown. */
@@ -117,13 +154,15 @@ public final class FeatureRegistry {
         private final FeaturePhase phase;
         private final String[] applicableNodeTypes;
         private final String contractVersion;
+        private final FeaturePrivilege privilege;
         private final Object instance;
 
-        FeatureEntry(String name, FeaturePhase phase, String[] applicableNodeTypes, String contractVersion, Object instance) {
+        FeatureEntry(String name, FeaturePhase phase, String[] applicableNodeTypes, String contractVersion, FeaturePrivilege privilege, Object instance) {
             this.name = name;
             this.phase = phase != null ? phase : FeaturePhase.PRE_FINALLY;
             this.applicableNodeTypes = applicableNodeTypes != null ? applicableNodeTypes.clone() : new String[0];
             this.contractVersion = contractVersion;
+            this.privilege = privilege != null ? privilege : FeaturePrivilege.INTERNAL;
             this.instance = instance;
         }
 
@@ -131,6 +170,11 @@ public final class FeatureRegistry {
         public FeaturePhase getPhase() { return phase; }
         /** Contract version (e.g. 1.0) for config compatibility; null = unknown. */
         public String getContractVersion() { return contractVersion; }
+        public FeaturePrivilege getPrivilege() { return privilege; }
+        /** True if kernel-privileged (can block execution). */
+        public boolean isInternal() { return privilege == FeaturePrivilege.INTERNAL; }
+        /** True if observer-only (must not block; failures are logged). */
+        public boolean isCommunity() { return privilege == FeaturePrivilege.COMMUNITY; }
         public String[] getApplicableNodeTypes() { return applicableNodeTypes.length == 0 ? applicableNodeTypes : applicableNodeTypes.clone(); }
         public Object getInstance() { return instance; }
 
