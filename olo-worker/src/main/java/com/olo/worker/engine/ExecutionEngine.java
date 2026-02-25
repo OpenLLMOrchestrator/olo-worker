@@ -5,10 +5,11 @@ import com.olo.executiontree.config.ExecutionType;
 import com.olo.executiontree.config.PipelineConfiguration;
 import com.olo.executiontree.config.PipelineDefinition;
 import com.olo.executiontree.tree.ExecutionTreeNode;
+import com.olo.plugin.PluginExecutor;
 
 import com.olo.worker.engine.node.NodeExecutor;
+import com.olo.worker.engine.runtime.RuntimeExecutionTree;
 
-import java.util.Collections;
 import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.ExecutorService;
@@ -27,14 +28,14 @@ public final class ExecutionEngine {
      *
      * @param snapshot         immutable snapshot (tenant, queue, config, version id)
      * @param inputValues      workflow input name to value (IN variables)
-     * @param pluginExecutor   plugin invoker
+     * @param pluginExecutor   plugin executor (contract; from {@link com.olo.plugin.PluginExecutorFactory})
      * @param tenantConfigMap  tenant-specific config map; may be null or empty
      * @return workflow result string from ResultMapper
      */
     public static String run(
             ExecutionConfigSnapshot snapshot,
             Map<String, Object> inputValues,
-            PluginInvoker.PluginExecutor pluginExecutor,
+            PluginExecutor pluginExecutor,
             Map<String, Object> tenantConfigMap) {
         Objects.requireNonNull(snapshot, "snapshot");
         return run(
@@ -54,7 +55,7 @@ public final class ExecutionEngine {
             String entryPipelineName,
             String queueName,
             Map<String, Object> inputValues,
-            PluginInvoker.PluginExecutor pluginExecutor,
+            PluginExecutor pluginExecutor,
             String tenantId,
             Map<String, Object> tenantConfigMap,
             String ledgerRunId) {
@@ -78,7 +79,9 @@ public final class ExecutionEngine {
             NodeExecutor nodeExecutor = new NodeExecutor(pluginInvoker, config, executionType, executor, tenantId, tenantConfigMap, ledgerRunId);
             ExecutionTreeNode root = pipeline.getExecutionTree();
             if (root != null) {
-                nodeExecutor.executeNode(root, pipeline, variableEngine, queueName != null ? queueName : "");
+                // Single source of truth: in-memory tree for this run. Planner mutates it (attachChildren); loop finds next.
+                RuntimeExecutionTree runtimeTree = new RuntimeExecutionTree(root);
+                nodeExecutor.runWithTree(runtimeTree, pipeline, variableEngine, queueName != null ? queueName : "");
             }
             return ResultMapper.apply(pipeline, variableEngine);
         } finally {
@@ -102,7 +105,7 @@ public final class ExecutionEngine {
      * @param pipeline        pipeline definition
      * @param queueName       task queue name (for feature resolution, e.g. -debug)
      * @param inputValues     workflow input name to value (IN variables)
-     * @param pluginExecutor  plugin invoker (e.g. activity::executePlugin + JSON)
+     * @param pluginExecutor  plugin executor (contract; from {@link com.olo.plugin.PluginExecutorFactory})
      * @param tenantId        tenant id (for feature context); may be null
      * @param tenantConfigMap tenant-specific config map; may be null or empty
      * @return workflow result string from ResultMapper
@@ -111,7 +114,7 @@ public final class ExecutionEngine {
             PipelineDefinition pipeline,
             String queueName,
             Map<String, Object> inputValues,
-            PluginInvoker.PluginExecutor pluginExecutor,
+            PluginExecutor pluginExecutor,
             String tenantId,
             Map<String, Object> tenantConfigMap) {
         Objects.requireNonNull(pipeline, "pipeline");
@@ -126,7 +129,8 @@ public final class ExecutionEngine {
             NodeExecutor nodeExecutor = new NodeExecutor(pluginInvoker, null, executionType, executor, tenantId, tenantConfigMap);
             ExecutionTreeNode root = pipeline.getExecutionTree();
             if (root != null) {
-                nodeExecutor.executeNode(root, pipeline, variableEngine, queueName != null ? queueName : "");
+                RuntimeExecutionTree runtimeTree = new RuntimeExecutionTree(root);
+                nodeExecutor.runWithTree(runtimeTree, pipeline, variableEngine, queueName != null ? queueName : "");
             }
             return ResultMapper.apply(pipeline, variableEngine);
         } finally {

@@ -11,8 +11,9 @@ import java.util.Map;
  * <p>
  * <b>Threading and state:</b> Plugin instances are run-scoped (one per node; same node in a loop
  * reuses the same instance). The engine invokes nodes sequentially per run. Do not assume
- * cross-node instance sharing. Implement as thread-safe if using mutable state, so behavior remains
- * correct if the engine introduces parallel node execution later. See docs: Threading and State Model.
+ * cross-node instance sharing. Do not assume execution order across loop iterations—future parallel
+ * execution of siblings could make stateful accumulation unsafe. Implement as thread-safe if using
+ * mutable state, so behavior remains correct if the engine introduces parallel node execution later.
  */
 public interface ExecutablePlugin {
 

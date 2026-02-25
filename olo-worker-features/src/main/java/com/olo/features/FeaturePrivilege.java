@@ -10,7 +10,8 @@ package com.olo.features;
  * <p>
  * <b>COMMUNITY (restricted):</b> Observer-class only. Can read {@link NodeExecutionContext}, log, emit metrics,
  * append attributes. Cannot block execution, modify execution plan, throw policy exceptions, override failure
- * semantics. If a community feature throws, the executor catches and logs; execution continues.
+ * semantics, or mutate execution state. {@link NodeExecutionContext} is immutable; community features must not
+ * mutate it. If a community feature throws, the executor catches and logs; execution continues.
  */
 public enum FeaturePrivilege {
 

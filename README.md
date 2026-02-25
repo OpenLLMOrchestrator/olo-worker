@@ -83,7 +83,7 @@ export OLO_DB_PORT=5432
 - **olo-worker-execution-tree** — Pipeline model, `ExecutionTreeNode`, `GlobalConfigurationContext`, configuration loader (Redis/DB/file).
 - **olo-worker-execution-context** — `LocalContext`, `ExecutionConfigSnapshot` (tenantId, queueName, config, optional runId).
 - **olo-run-ledger** — Run ledger (optional): `LedgerStore`, `JdbcLedgerStore` (olo_run, olo_run_node, olo_config; UUID/TIMESTAMPTZ); RunLedger, RunLevelLedgerFeature, NodeLedgerFeature.
-- **olo-worker-features** — FeatureRegistry, PreNodeCall/PostNodeCall, FeatureAttachmentResolver, NodeExecutionContext.
+- **olo-worker-features** — FeatureRegistry, PreNodeCall/FinallyCall/PreFinallyCall, FeatureAttachmentResolver, NodeExecutionContext.
 - **olo-feature-debug** — DebuggerFeature (pre/post logging when queue ends with `-debug`).
 - **olo-feature-quota** — QuotaFeature (per-tenant soft/hard limits from Redis activeWorkflows).
 - **olo-feature-metrics** — MetricsFeature (node execution counters).

@@ -262,3 +262,43 @@ Without a defined merge strategy, JOIN cannot be executed correctly; it is requi
 SWITCH and CASE are part of Phase 1 (multi-branch); they are implemented.
 
 See [variable-execution-model.md](variable-execution-model.md) for variable rules; [pipeline-configuration-how-to.md](pipeline-configuration-how-to.md) for JSON structure.
+
+---
+
+## Planner flow (OLO-aligned)
+
+**Design:** Model = first-class plugin (tool). Planner = interpreter (pure logic: read plan text → build subtree → run children). Engine = orchestrator. The PLANNER node does **not** produce a result value; it builds and runs a dynamic subtree. Results live in step variables (e.g. `__planner_step_0_response`).
+
+### 16. PLANNER (interpreter)
+
+**Purpose:** Read plan text (JSON) from a variable, interpret it into steps via a SubtreeBuilder, inject variables, and run the built nodes in order. Does not call a model unless legacy params are set.
+
+- **type:** `"PLANNER"`
+- **children:** None (dynamic children are built at runtime from the plan).
+- **params:**
+  - **planInputVariable** (string, default `"__planner_result"`): Variable holding the plan JSON (e.g. from a preceding PLUGIN model node). Used in interpret-only mode.
+  - **modelPluginRef** (string, optional): Model plugin for plan text (e.g. `"GPT4_EXECUTOR"`). Omit for interpret-only.
+  - **parser** (string, default `"default"`): Parser name. Use `"DEFAULT_JSON_ARRAY_PARSER"` for contract-style JSON-array steps. Custom/deterministic parsers register in SubtreeBuilderRegistry.
+  - **treeBuilder** (string, optional): Alias for **parser**.
+  - **subtreeCreatorPluginRef** (string, optional): If set, the plan text is passed to this SUBTREE_CREATOR plugin (input `planText`); the plugin returns `variablesToInject` and `steps` (list of `{ pluginRef, prompt }`). The engine builds nodes from steps, injects variables, and runs the subtree. Use this to get **plan as plugin output** and execution subtree built by a dedicated plugin. Default plugin id: `DEFAULT_JSON_SUBTREE_CREATOR` (olo-planner-a).
+  - **Legacy:** **userQueryVariable**, **resultVariable** when using modelPluginRef.
+
+**Example:** `{ "type": "PLANNER", "params": { "modelPluginRef": "GPT4_EXECUTOR", "parser": "DEFAULT_JSON_ARRAY_PARSER" } }` — model swappable, parser pluggable. To use the subtree-creator plugin: `{ "type": "PLANNER", "params": { "planInputVariable": "__planner_result", "subtreeCreatorPluginRef": "DEFAULT_JSON_SUBTREE_CREATOR" } }`.
+
+**Interpret-only (recommended):** Omit `modelPluginRef`. Pipeline: FILL_TEMPLATE → PLUGIN (model) → PLANNER. The PLUGIN writes plan text to `__planner_result`; PLANNER parses it and runs the steps.
+
+**Result:** PLANNER does not set a node “result”; it orchestrates children. Map workflow output from step variables (e.g. `__planner_step_0_response` → `answer` in resultMapping).
+
+### 17. FILL_TEMPLATE
+
+**Purpose:** Fill a prompt template with the user query and write to an output variable. Use before the model PLUGIN in OLO-aligned planner flows.
+
+- **type:** `"FILL_TEMPLATE"`
+- **children:** None.
+- **params:**
+  - **templateKey** (string, optional): Key for PlannerTemplateStore (e.g. queue name or `"default"`). Ignored if **template** is set.
+  - **template** (string, optional): Inline template; use `{{userQuery}}` (PlannerContract.USER_QUERY_PLACEHOLDER) for the user query.
+  - **userQueryVariable** (string, default `"userQuery"`): Variable to read the user query from.
+  - **outputVariable** (string, default `"__planner_prompt"`): Variable to write the filled prompt to.
+
+**Example flow:** SEQUENCE → FILL_TEMPLATE (writes `__planner_prompt`) → PLUGIN pluginRef=GPT4_EXECUTOR (reads `__planner_prompt`, writes `__planner_result`) → PLANNER interpret-only (reads `__planner_result`, builds and runs steps).

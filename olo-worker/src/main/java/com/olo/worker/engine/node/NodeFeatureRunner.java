@@ -4,7 +4,6 @@ import com.olo.features.FeatureRegistry;
 import com.olo.features.FinallyCall;
 import com.olo.features.NodeExecutionContext;
 import com.olo.features.PostErrorCall;
-import com.olo.features.PostNodeCall;
 import com.olo.features.PostSuccessCall;
 import com.olo.features.PreFinallyCall;
 import com.olo.features.PreNodeCall;
@@ -73,8 +72,6 @@ public final class NodeFeatureRunner {
                         ((PreFinallyCall) inst).afterSuccess(context, nodeResult);
                     } else if (inst instanceof PostSuccessCall) {
                         ((PostSuccessCall) inst).afterSuccess(context, nodeResult);
-                    } else if (inst instanceof PostNodeCall) {
-                        ((PostNodeCall) inst).after(context, nodeResult);
                     }
                 }
                 case ERROR -> {
@@ -82,8 +79,6 @@ public final class NodeFeatureRunner {
                         ((PreFinallyCall) inst).afterError(context, nodeResult);
                     } else if (inst instanceof PostErrorCall) {
                         ((PostErrorCall) inst).afterError(context, nodeResult);
-                    } else if (inst instanceof PostNodeCall) {
-                        ((PostNodeCall) inst).after(context, nodeResult);
                     }
                 }
                 case FINALLY -> {
@@ -91,8 +86,6 @@ public final class NodeFeatureRunner {
                         ((PreFinallyCall) inst).afterFinally(context, nodeResult);
                     } else if (inst instanceof FinallyCall) {
                         ((FinallyCall) inst).afterFinally(context, nodeResult);
-                    } else if (inst instanceof PostNodeCall) {
-                        ((PostNodeCall) inst).after(context, nodeResult);
                     }
                 }
             }

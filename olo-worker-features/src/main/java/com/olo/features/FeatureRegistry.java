@@ -30,8 +30,8 @@ public final class FeatureRegistry {
     /**
      * Registers a feature instance as <b>INTERNAL</b>. Reads {@link OloFeature} from the class and stores by {@link OloFeature#name()}.
      * The instance must implement the contract(s) for its phase: {@link PreNodeCall} (PRE), {@link PostSuccessCall} (POST_SUCCESS),
-     * {@link PostErrorCall} (POST_ERROR), {@link FinallyCall} (FINALLY), or {@link PreFinallyCall} (PRE_FINALLY). Legacy {@link PostNodeCall}
-     * is supported as a fallback for any post phase.
+     * {@link PostErrorCall} (POST_ERROR), {@link FinallyCall} (FINALLY), or {@link PreFinallyCall} (PRE_FINALLY).
+     * Prefer POST_SUCCESS/POST_ERROR for heavy lifting; FINALLY/PRE_FINALLY for non–exception-prone code.
      *
      * @param featureInstance object whose class is annotated with @OloFeature and implements pre/post hooks
      * @throws IllegalArgumentException if the class is not annotated with @OloFeature or name is already registered

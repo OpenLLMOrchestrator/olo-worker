@@ -49,17 +49,12 @@
           "scope": "IN"
         },
         {
-          "name": "model1Response",
+          "name": "__planner_result",
           "type": "STRING",
           "scope": "INTERNAL"
         },
         {
-          "name": "model2Response",
-          "type": "STRING",
-          "scope": "INTERNAL"
-        },
-        {
-          "name": "finalAnswer",
+          "name": "__planner_step_0_response",
           "type": "STRING",
           "scope": "OUT"
         }
@@ -67,8 +62,26 @@
       "scope": {
         "plugins": [
           {
+            "id": "ECHO_TOOL",
+            "displayName": "Echo",
+            "contractType": "MODEL_EXECUTOR",
+            "inputParameters": [
+              {
+                "name": "prompt",
+                "type": "STRING",
+                "required": true
+              }
+            ],
+            "outputParameters": [
+              {
+                "name": "responseText",
+                "type": "STRING"
+              }
+            ]
+          },
+          {
             "id": "GPT4_EXECUTOR",
-            "displayName": "Ollama",
+            "displayName": "Ollama (Planner)",
             "contractType": "MODEL_EXECUTOR",
             "inputParameters": [
               {
@@ -80,133 +93,29 @@
             "outputParameters": [
               {
                 "name": "responseText",
-                "type": "STRING"
-              }
-            ]
-          },
-          {
-            "id": "LITELLM_EXECUTOR",
-            "displayName": "OpenAI (LiteLLM)",
-            "contractType": "MODEL_EXECUTOR",
-            "inputParameters": [
-              {
-                "name": "prompt",
-                "type": "STRING",
-                "required": true
-              }
-            ],
-            "outputParameters": [
-              {
-                "name": "responseText",
-                "type": "STRING"
-              }
-            ]
-          },
-          {
-            "id": "OUTPUT_REDUCER",
-            "displayName": "Output Reducer",
-            "contractType": "REDUCER",
-            "inputParameters": [],
-            "outputParameters": [
-              {
-                "name": "combinedOutput",
                 "type": "STRING"
               }
             ]
           }
         ],
-        "features": [
-          {
-            "id": "debug",
-            "displayName": "Debug"
-          }
-        ]
+        "features": []
       },
       "executionTree": {
         "id": "root",
-        "displayName": "Pipeline",
+        "displayName": "Echo via Planner",
         "type": "SEQUENCE",
         "children": [
           {
-            "id": "modelExecutionGroup",
-            "displayName": "Model Execution",
-            "type": "GROUP",
-            "children": [
-              {
-                "id": "forkNode",
-                "displayName": "Fork",
-                "type": "FORK",
-                "params": {
-                  "executionType": "ASYNC"
-                },
-                "children": [
-                  {
-                    "id": "model1Node",
-                    "displayName": "Model 1",
-                    "type": "PLUGIN",
-                    "nodeType": "MODEL_EXECUTOR",
-                    "pluginRef": "GPT4_EXECUTOR",
-                    "inputMappings": [
-                      {
-                        "pluginParameter": "prompt",
-                        "variable": "userQuery"
-                      }
-                    ],
-                    "outputMappings": [
-                      {
-                        "pluginParameter": "responseText",
-                        "variable": "model1Response"
-                      }
-                    ]
-                  },
-                  {
-                    "id": "model2Node",
-                    "displayName": "OpenAI",
-                    "type": "PLUGIN",
-                    "nodeType": "MODEL_EXECUTOR",
-                    "pluginRef": "LITELLM_EXECUTOR",
-                    "inputMappings": [
-                      {
-                        "pluginParameter": "prompt",
-                        "variable": "userQuery"
-                      }
-                    ],
-                    "outputMappings": [
-                      {
-                        "pluginParameter": "responseText",
-                        "variable": "model2Response"
-                      }
-                    ]
-                  }
-                ]
-              },
-              {
-                "id": "joinNode",
-                "displayName": "Join",
-                "type": "JOIN",
-                "params": {
-                  "mergeStrategy": "REDUCE"
-                },
-                "pluginRef": "OUTPUT_REDUCER",
-                "inputMappings": [
-                  {
-                    "pluginParameter": "Ollama",
-                    "variable": "model1Response"
-                  },
-                  {
-                    "pluginParameter": "OpenAI",
-                    "variable": "model2Response"
-                  }
-                ],
-                "outputMappings": [
-                  {
-                    "pluginParameter": "combinedOutput",
-                    "variable": "finalAnswer"
-                  }
-                ],
-                "children": []
-              }
-            ]
+            "id": "plannerNode",
+            "displayName": "Planner",
+            "type": "PLANNER",
+            "params": {
+              "modelPluginRef": "GPT4_EXECUTOR",
+              "userQueryVariable": "userQuery",
+              "resultVariable": "__planner_result",
+              "treeBuilder": "default"
+            },
+            "children": []
           }
         ]
       },
@@ -220,11 +129,11 @@
       },
       "resultMapping": [
         {
-          "variable": "finalAnswer",
+          "variable": "__planner_step_0_response",
           "outputParameter": "answer"
         }
       ],
-      "executionType": "ASYNC"
+      "executionType": "SYNC"
     }
   }
 }

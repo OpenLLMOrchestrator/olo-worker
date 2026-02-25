@@ -1,4 +1,4 @@
-package com.olo.worker.config;
+package com.olo.bootstrap.validation;
 
 /**
  * Thrown when config compatibility validation fails (config version, plugin contract version, or feature contract version).

@@ -7,7 +7,10 @@ package com.olo.features;
  * If an observer throws, the executor catches and logs; execution continues.
  *
  * @see FeaturePrivilege#COMMUNITY
- * @see PostNodeCall for internal (kernel-privileged) post hooks
+ * @see PostSuccessCall
+ * @see PostErrorCall
+ * @see FinallyCall
+ * @see PreFinallyCall
  */
 @FunctionalInterface
 public interface ObserverPostNodeCall {

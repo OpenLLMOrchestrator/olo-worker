@@ -56,6 +56,11 @@ public final class PluginRegistry {
         register(tenantId, id, ContractType.REDUCER, "1.0", plugin);
     }
 
+    /** Registers a subtree-creator plugin for the given tenant (plan text → variablesToInject + steps). */
+    public void registerSubtreeCreator(String tenantId, String id, ExecutablePlugin plugin) {
+        register(tenantId, id, ContractType.SUBTREE_CREATOR, "1.0", plugin);
+    }
+
     /**
      * Registers a plugin for the given tenant under the given id and contract type.
      *

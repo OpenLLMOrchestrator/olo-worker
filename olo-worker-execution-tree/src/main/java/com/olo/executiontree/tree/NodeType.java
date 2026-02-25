@@ -29,6 +29,10 @@ public enum NodeType {
     TOOL_ROUTER,
     EVALUATION,
     REFLECTION,
+    /** Plans at runtime using a static template + LLM (e.g. Llama), then builds and runs a dynamic subtree. */
+    PLANNER,
+    /** Fills a prompt template (template + userQuery → output variable). Use before a model PLUGIN in planner flows. */
+    FILL_TEMPLATE,
     /** Used when config contains an unknown type string. */
     UNKNOWN;
 

@@ -126,8 +126,30 @@ public class OloKernelWorkflowImpl implements OloKernelWorkflow {
                 variableMapJson = untypedActivityStub.execute(
                         activityType,
                         String.class,
-                        planJson, nodeId, variableMapJson, planQueueName, workflowInputJson);
+                        planJson, nodeId, variableMapJson, planQueueName, workflowInputJson, null);
                 if (variableMapJson == null) variableMapJson = "{}";
+                Map<String, Object> parsed = parseAsMap(variableMapJson);
+                if (parsed != null && parsed.containsKey("dynamicSteps")) {
+                    Object vm = parsed.get("variableMapJson");
+                    variableMapJson = vm != null ? vm.toString() : "{}";
+                    Object stepsObj = parsed.get("dynamicSteps");
+                    String dynamicStepsJson = stepsObj != null ? MAPPER.writeValueAsString(stepsObj) : "[]";
+                    @SuppressWarnings("unchecked")
+                    List<Map<String, Object>> dynamicSteps = (List<Map<String, Object>>) stepsObj;
+                    if (dynamicSteps != null) {
+                        for (Map<String, Object> step : dynamicSteps) {
+                            String stepActivityType = step.get("activityType") != null ? step.get("activityType").toString() : null;
+                            String stepNodeId = step.get("nodeId") != null ? step.get("nodeId").toString() : null;
+                            if (stepActivityType == null || stepNodeId == null) continue;
+                            variableMapJson = untypedActivityStub.execute(
+                                    stepActivityType,
+                                    String.class,
+                                    planJson, stepNodeId, variableMapJson, planQueueName, workflowInputJson, dynamicStepsJson);
+                            if (variableMapJson == null) variableMapJson = "{}";
+                        }
+                    }
+                    break;
+                }
             }
             String result = activities.applyResultMapping(planJson, variableMapJson);
             return result != null ? result : "";
@@ -138,6 +160,15 @@ public class OloKernelWorkflowImpl implements OloKernelWorkflow {
                     "Scheduling RunExecutionTree activity: fallback after per-node execution failure");
             String result = activities.runExecutionTree(queueNameOrEmpty, workflowInputJson);
             return result != null ? result : "";
+        }
+    }
+
+    private static Map<String, Object> parseAsMap(String json) {
+        if (json == null || json.isBlank()) return null;
+        try {
+            return MAPPER.readValue(json, new TypeReference<Map<String, Object>>() {});
+        } catch (Exception e) {
+            return null;
         }
     }
 
@@ -209,7 +240,7 @@ public class OloKernelWorkflowImpl implements OloKernelWorkflow {
             if (activityType == null || nodeId == null) return variableMapJson;
             return untypedActivityStub.execute(
                     activityType, String.class,
-                    planJson, nodeId, variableMapJson, queueForActivities, workflowInputJson);
+                    planJson, nodeId, variableMapJson, queueForActivities, workflowInputJson, null);
         }
         List<Promise<String>> promises = new ArrayList<>();
         List<List<String>> outputVariablesPerResult = new ArrayList<>();
@@ -230,7 +261,7 @@ public class OloKernelWorkflowImpl implements OloKernelWorkflow {
             final String currentMap = variableMapJson;
             Promise<String> p = Async.function(() -> untypedActivityStub.execute(
                     activityType, String.class,
-                    planJson, nodeId, currentMap, queueForActivities, workflowInputJson));
+                    planJson, nodeId, currentMap, queueForActivities, workflowInputJson, null));
             promises.add(p);
         }
         if (promises.isEmpty()) return variableMapJson;

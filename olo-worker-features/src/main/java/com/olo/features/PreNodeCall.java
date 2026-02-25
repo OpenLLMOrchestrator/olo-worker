@@ -2,7 +2,7 @@ package com.olo.features;
 
 /**
  * Contract for feature logic that runs before a tree node executes.
- * Implement this (and optionally {@link PostNodeCall}) and annotate the class with {@link com.olo.annotations.OloFeature}.
+ * Implement this (and optionally {@link FinallyCall}, {@link PostSuccessCall}, {@link PostErrorCall}, or {@link PreFinallyCall}) and annotate the class with {@link com.olo.annotations.OloFeature}.
  */
 @FunctionalInterface
 public interface PreNodeCall {

@@ -6,24 +6,24 @@ import com.olo.executiontree.defaults.ExecutionDefaults;
 import com.olo.executiontree.defaults.TemporalDefaults;
 
 import java.util.Collections;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 
 /**
- * Wrapper object returned from bootstrap. Holds env-derived configuration plus
- * a read-only map of pipeline configs (keyed by "tenant:queue" for validation).
- * <p>
- * For the runtime configuration store, see {@link com.olo.executiontree.load.GlobalConfigurationContext}.
+ * Default implementation of {@link BootstrapContext}. Holds env-derived configuration,
+ * pipeline configs by "tenant:queue", and mutable contributor data.
  */
-public final class BootstrapContext {
+public final class BootstrapContextImpl implements BootstrapContext {
 
     private final OloConfig config;
     private final List<String> taskQueues;
     private final List<String> tenantIds;
     private final Map<String, PipelineConfiguration> pipelineConfigByQueue;
+    private final Map<String, Object> contributorData = new LinkedHashMap<>();
 
-    public BootstrapContext(
+    public BootstrapContextImpl(
             OloConfig config,
             Map<String, PipelineConfiguration> pipelineConfigByQueue,
             List<String> tenantIds) {
@@ -35,41 +35,32 @@ public final class BootstrapContext {
                 : Collections.unmodifiableMap(pipelineConfigByQueue);
     }
 
-    /** @deprecated Use {@link #BootstrapContext(OloConfig, Map, List)} with tenant ids. */
     @Deprecated
-    public BootstrapContext(OloConfig config, Map<String, PipelineConfiguration> pipelineConfigByQueue) {
+    public BootstrapContextImpl(OloConfig config, Map<String, PipelineConfiguration> pipelineConfigByQueue) {
         this(config, pipelineConfigByQueue, null);
     }
 
-    /** Configuration built from environment (OLO_QUEUE, OLO_TENANT_IDS, OLO_CACHE_*, etc.). */
+    @Override
     public OloConfig getConfig() {
         return config;
     }
 
-    /** Task queue names from config (same as {@code getConfig().getTaskQueues()}). */
+    @Override
     public List<String> getTaskQueues() {
         return taskQueues;
     }
 
-    /** Tenant ids that were loaded at bootstrap (from Redis olo:tenants or OLO_TENANT_IDS). Use when registering plugins per tenant. */
+    @Override
     public List<String> getTenantIds() {
         return tenantIds;
     }
 
-    /** Read-only map: composite key "tenant:queue" → deserialized pipeline configuration (for validation). */
+    @Override
     public Map<String, PipelineConfiguration> getPipelineConfigByQueue() {
         return pipelineConfigByQueue;
     }
 
-    /** Returns the pipeline configuration for the given composite key, or null if not loaded. */
-    public PipelineConfiguration getPipelineConfig(String key) {
-        return pipelineConfigByQueue.get(key);
-    }
-
-    /**
-     * Temporal connection target (e.g. {@code localhost:7233}) from pipeline configuration.
-     * Uses the first available queue's {@code executionDefaults.temporal.target}; falls back to default if none set.
-     */
+    @Override
     public String getTemporalTargetOrDefault(String defaultTarget) {
         for (PipelineConfiguration pc : pipelineConfigByQueue.values()) {
             ExecutionDefaults ed = pc != null ? pc.getExecutionDefaults() : null;
@@ -81,10 +72,7 @@ public final class BootstrapContext {
         return defaultTarget != null ? defaultTarget : "localhost:7233";
     }
 
-    /**
-     * Temporal namespace from pipeline configuration.
-     * Uses the first available queue's {@code executionDefaults.temporal.namespace}; falls back to default if none set.
-     */
+    @Override
     public String getTemporalNamespaceOrDefault(String defaultNamespace) {
         for (PipelineConfiguration pc : pipelineConfigByQueue.values()) {
             ExecutionDefaults ed = pc != null ? pc.getExecutionDefaults() : null;
@@ -94,5 +82,22 @@ public final class BootstrapContext {
             }
         }
         return defaultNamespace != null ? defaultNamespace : "default";
+    }
+
+    @Override
+    public void putContributorData(String key, Object value) {
+        if (key != null && !key.isBlank()) {
+            contributorData.put(key, value);
+        }
+    }
+
+    @Override
+    public Object getContributorData(String key) {
+        return contributorData.get(key);
+    }
+
+    @Override
+    public Map<String, Object> getContributorData() {
+        return Collections.unmodifiableMap(new LinkedHashMap<>(contributorData));
     }
 }

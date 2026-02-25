@@ -4,13 +4,11 @@ import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.olo.config.OloConfig;
 import com.olo.config.OloSessionCache;
-import com.olo.config.TenantConfig;
 import com.olo.config.TenantConfigRegistry;
 import com.olo.executioncontext.ExecutionConfigSnapshot;
 import com.olo.executioncontext.LocalContext;
 import com.olo.executiontree.config.PipelineConfiguration;
 import com.olo.executiontree.config.PipelineDefinition;
-import com.olo.executiontree.config.ExecutionType;
 import com.olo.executiontree.tree.ExecutionTreeNode;
 import com.olo.executiontree.tree.NodeType;
 import com.olo.executiontree.tree.ParameterMapping;
@@ -18,8 +16,8 @@ import com.olo.input.model.WorkflowInput;
 import com.olo.ledger.LedgerContext;
 import com.olo.ledger.RunLedger;
 import com.olo.internal.features.InternalFeatures;
-import com.olo.plugin.ExecutablePlugin;
-import com.olo.plugin.PluginRegistry;
+import com.olo.plugin.PluginExecutor;
+import com.olo.plugin.PluginExecutorFactory;
 import com.olo.worker.engine.ExecutionEngine;
 import com.olo.worker.engine.ExecutionPlanBuilder;
 import com.olo.worker.engine.node.NodeExecutor;
@@ -53,21 +51,14 @@ public class OloKernelActivitiesImpl implements OloKernelActivities {
     private final OloSessionCache sessionCache;
     private final Set<String> allowedTenantIds;
     private final RunLedger runLedger;
+    private final PluginExecutorFactory pluginExecutorFactory;
 
-    public OloKernelActivitiesImpl(OloSessionCache sessionCache, List<String> allowedTenantIds) {
-        this(sessionCache, allowedTenantIds, null);
-    }
-
-    public OloKernelActivitiesImpl(OloSessionCache sessionCache, List<String> allowedTenantIds, RunLedger runLedger) {
+    public OloKernelActivitiesImpl(OloSessionCache sessionCache, List<String> allowedTenantIds, RunLedger runLedger,
+                                   PluginExecutorFactory pluginExecutorFactory) {
         this.sessionCache = sessionCache;
         this.allowedTenantIds = allowedTenantIds != null ? Set.copyOf(allowedTenantIds) : Set.of();
         this.runLedger = runLedger;
-    }
-
-    /** @deprecated Use {@link #OloKernelActivitiesImpl(OloSessionCache, List)}. */
-    @Deprecated
-    public OloKernelActivitiesImpl(OloSessionCache sessionCache) {
-        this(sessionCache, List.of());
+        this.pluginExecutorFactory = pluginExecutorFactory != null ? pluginExecutorFactory : (tenantId, cache) -> { throw new IllegalStateException("PluginExecutorFactory not set; worker must be started with bootstrap context"); };
     }
 
     @Override
@@ -98,32 +89,20 @@ public class OloKernelActivitiesImpl implements OloKernelActivities {
     /**
      * Executes a plugin for the given tenant. When {@code nodeId} and {@code nodeInstanceCache} are non-null,
      * uses per-node instance (one per tree node; same node in a loop reuses the same instance).
+     * Uses the injected {@link PluginExecutorFactory} (contract only; no dependency on PluginRegistry).
      */
     private String executePlugin(String tenantId, String pluginId, String inputsJson) {
         return executePlugin(tenantId, pluginId, inputsJson, null, null);
     }
 
     private String executePlugin(String tenantId, String pluginId, String inputsJson,
-                                  String nodeId, java.util.Map<String, ExecutablePlugin> nodeInstanceCache) {
-        ExecutablePlugin plugin = (nodeId != null && nodeInstanceCache != null)
-                ? PluginRegistry.getInstance().getExecutable(tenantId, pluginId, nodeId, nodeInstanceCache)
-                : PluginRegistry.getInstance().getExecutable(tenantId, pluginId);
-        if (plugin == null) {
-            throw new IllegalArgumentException("No plugin registered for tenant=" + tenantId + " id=" + pluginId);
-        }
-        Map<String, Object> inputs;
+                                  String nodeId, java.util.Map<String, ?> nodeInstanceCache) {
+        PluginExecutor executor = pluginExecutorFactory.create(tenantId, nodeInstanceCache);
         try {
-            inputs = MAPPER.readValue(inputsJson, MAP_TYPE);
-        } catch (Exception e) {
-            throw new IllegalArgumentException("Invalid inputs JSON for plugin " + pluginId + ": " + e.getMessage(), e);
-        }
-        TenantConfig tenantConfig = TenantConfigRegistry.getInstance().get(tenantId);
-        try {
-            Map<String, Object> outputs = plugin.execute(inputs, tenantConfig);
-            return MAPPER.writeValueAsString(outputs != null ? outputs : Map.of());
+            return executor.execute(pluginId, inputsJson, nodeId);
         } catch (Exception e) {
             log.error("Plugin execution failed: tenant={} pluginId={}", tenantId, pluginId, e);
-            throw new RuntimeException("Plugin execution failed: " + pluginId + " - " + e.getMessage(), e);
+            throw e instanceof RuntimeException ? (RuntimeException) e : new RuntimeException("Plugin execution failed: " + pluginId + " - " + e.getMessage(), e);
         }
     }
 
@@ -147,7 +126,6 @@ public class OloKernelActivitiesImpl implements OloKernelActivities {
     }
 
     @Override
-    @SuppressWarnings("unchecked")
     public String getExecutionPlan(String queueName, String workflowInputJson) {
         WorkflowInput workflowInput;
         try {
@@ -291,13 +269,16 @@ public class OloKernelActivitiesImpl implements OloKernelActivities {
 
     @Override
     public String executeNode(String activityType, String planJson, String nodeId, String variableMapJson,
-                              String queueName, String workflowInputJson) {
+                              String queueName, String workflowInputJson, String dynamicStepsJson) {
         Map<String, Object> payload = new LinkedHashMap<>();
         payload.put("planJson", planJson);
         payload.put("nodeId", nodeId);
         payload.put("variableMapJson", variableMapJson);
         payload.put("queueName", queueName != null ? queueName : "");
         payload.put("workflowInputJson", workflowInputJson);
+        if (dynamicStepsJson != null && !dynamicStepsJson.isBlank()) {
+            payload.put("dynamicStepsJson", dynamicStepsJson);
+        }
         try {
             return executeNode(MAPPER.writeValueAsString(payload));
         } catch (Exception e) {
@@ -306,7 +287,7 @@ public class OloKernelActivitiesImpl implements OloKernelActivities {
     }
 
     /**
-     * Executes a single node (payload JSON). Used by {@link #executeNode(String, String, String, String, String, String)}.
+     * Executes a single node (payload JSON). Used by {@link #executeNode(String, String, String, String, String, String, String)}.
      */
     private String executeNode(String payloadJson) {
         Map<String, Object> payload;
@@ -320,6 +301,7 @@ public class OloKernelActivitiesImpl implements OloKernelActivities {
         String variableMapJson = (String) payload.get("variableMapJson");
         String queueName = payload.get("queueName") != null ? payload.get("queueName").toString() : "";
         String workflowInputJson = (String) payload.get("workflowInputJson");
+        String dynamicStepsJson = (String) payload.get("dynamicStepsJson");
         if (planJson == null || nodeId == null || variableMapJson == null || workflowInputJson == null) {
             throw new IllegalArgumentException("executeNode payload missing planJson, nodeId, variableMapJson or workflowInputJson");
         }
@@ -351,9 +333,6 @@ public class OloKernelActivitiesImpl implements OloKernelActivities {
             throw new IllegalArgumentException("Pipeline or execution tree not found");
         }
         ExecutionTreeNode node = ExecutionTreeNode.findNodeById(pipeline.getExecutionTree(), nodeId);
-        if (node == null) {
-            throw new IllegalArgumentException("Node not found: " + nodeId);
-        }
         Map<String, Object> variableMap;
         try {
             variableMap = MAPPER.readValue(variableMapJson, MAP_TYPE);
@@ -361,11 +340,46 @@ public class OloKernelActivitiesImpl implements OloKernelActivities {
             throw new IllegalArgumentException("Invalid variableMapJson: " + e.getMessage(), e);
         }
         VariableEngine variableEngine = VariableEngine.fromVariableMap(pipeline, variableMap);
-        java.util.Map<String, ExecutablePlugin> nodeInstanceCache = new LinkedHashMap<>();
-        PluginInvoker pluginInvoker = new PluginInvoker(pluginExecutor(tenantId, nodeInstanceCache));
+        java.util.Map<String, Object> nodeInstanceCache = new LinkedHashMap<>();
+        PluginExecutor executor = pluginExecutorFactory.create(tenantId, nodeInstanceCache);
+        PluginInvoker pluginInvoker = new PluginInvoker(executor);
         NodeExecutor nodeExecutor = new NodeExecutor(
                 pluginInvoker, config, pipeline.getExecutionType(), null, tenantId,
                 TenantConfigRegistry.getInstance().get(tenantId).getConfigMap(), null);
+
+        if (node == null && dynamicStepsJson != null && !dynamicStepsJson.isBlank()) {
+            ExecutionTreeNode stepNode = resolveDynamicStep(nodeId, dynamicStepsJson);
+            if (stepNode != null) {
+                nodeExecutor.executeSingleNode(stepNode, pipeline, variableEngine, queueName);
+                try {
+                    return MAPPER.writeValueAsString(variableEngine.getExportMap());
+                } catch (Exception e) {
+                    throw new RuntimeException("Failed to serialize variable map", e);
+                }
+            }
+        }
+        if (node == null) {
+            throw new IllegalArgumentException("Node not found: " + nodeId);
+        }
+        if (node.getType() == NodeType.PLANNER) {
+            List<ExecutionTreeNode> steps = nodeExecutor.executePlannerOnly(node, pipeline, variableEngine, queueName);
+            List<Map<String, Object>> dynamicSteps = new ArrayList<>();
+            for (ExecutionTreeNode step : steps) {
+                dynamicSteps.add(dynamicStepFromNode(step));
+            }
+            Map<String, Object> plannerResult = new LinkedHashMap<>();
+            try {
+                plannerResult.put("variableMapJson", MAPPER.writeValueAsString(variableEngine.getExportMap()));
+                plannerResult.put("dynamicSteps", dynamicSteps);
+            } catch (Exception e) {
+                throw new RuntimeException("Failed to serialize planner result", e);
+            }
+            try {
+                return MAPPER.writeValueAsString(plannerResult);
+            } catch (Exception e) {
+                throw new RuntimeException("Failed to serialize planner result JSON", e);
+            }
+        }
         nodeExecutor.executeSingleNode(node, pipeline, variableEngine, queueName);
         try {
             return MAPPER.writeValueAsString(variableEngine.getExportMap());
@@ -374,13 +388,111 @@ public class OloKernelActivitiesImpl implements OloKernelActivities {
         }
     }
 
+    private static Map<String, Object> dynamicStepFromNode(ExecutionTreeNode n) {
+        Map<String, Object> step = new LinkedHashMap<>();
+        step.put("nodeId", n.getId());
+        String activityType = NodeType.PLUGIN.name();
+        if (n.getPluginRef() != null && !n.getPluginRef().isBlank()) {
+            activityType = NodeType.PLUGIN.name() + ":" + n.getPluginRef();
+        }
+        step.put("activityType", activityType);
+        step.put("pluginRef", n.getPluginRef());
+        step.put("displayName", n.getDisplayName());
+        List<Map<String, String>> inputMappings = new ArrayList<>();
+        if (n.getInputMappings() != null) {
+            for (ParameterMapping m : n.getInputMappings()) {
+                Map<String, String> entry = new LinkedHashMap<>();
+                entry.put("pluginParameter", m.getPluginParameter());
+                entry.put("variable", m.getVariable());
+                inputMappings.add(entry);
+            }
+        }
+        step.put("inputMappings", inputMappings);
+        List<Map<String, String>> outputMappings = new ArrayList<>();
+        if (n.getOutputMappings() != null) {
+            for (ParameterMapping m : n.getOutputMappings()) {
+                Map<String, String> entry = new LinkedHashMap<>();
+                entry.put("pluginParameter", m.getPluginParameter());
+                entry.put("variable", m.getVariable());
+                outputMappings.add(entry);
+            }
+        }
+        step.put("outputMappings", outputMappings);
+        return step;
+    }
+
+    private static ExecutionTreeNode resolveDynamicStep(String nodeId, String dynamicStepsJson) {
+        List<Map<String, Object>> steps;
+        try {
+            steps = MAPPER.readValue(dynamicStepsJson, new TypeReference<List<Map<String, Object>>>() {});
+        } catch (Exception e) {
+            return null;
+        }
+        if (steps == null) return null;
+        for (Map<String, Object> step : steps) {
+            Object id = step.get("nodeId");
+            if (id != null && id.toString().equals(nodeId)) {
+                return nodeFromDynamicStep(step);
+            }
+        }
+        return null;
+    }
+
+    @SuppressWarnings("unchecked")
+    private static ExecutionTreeNode nodeFromDynamicStep(Map<String, Object> step) {
+        String id = step.get("nodeId") != null ? step.get("nodeId").toString() : UUID.randomUUID().toString();
+        String displayName = step.get("displayName") != null ? step.get("displayName").toString() : "step";
+        String pluginRef = step.get("pluginRef") != null ? step.get("pluginRef").toString() : null;
+        List<ParameterMapping> inputMappings = new ArrayList<>();
+        Object in = step.get("inputMappings");
+        if (in instanceof List<?> list) {
+            for (Object o : list) {
+                if (o instanceof Map) {
+                    Map<String, String> m = (Map<String, String>) o;
+                    String pp = m != null ? m.get("pluginParameter") : null;
+                    String v = m != null ? m.get("variable") : null;
+                    if (pp != null && v != null) {
+                        inputMappings.add(new ParameterMapping(pp, v));
+                    }
+                }
+            }
+        }
+        List<ParameterMapping> outputMappings = new ArrayList<>();
+        Object out = step.get("outputMappings");
+        if (out instanceof List<?> list) {
+            for (Object o : list) {
+                if (o instanceof Map) {
+                    Map<String, String> m = (Map<String, String>) o;
+                    String pp = m != null ? m.get("pluginParameter") : null;
+                    String v = m != null ? m.get("variable") : null;
+                    if (pp != null && v != null) {
+                        outputMappings.add(new ParameterMapping(pp, v));
+                    }
+                }
+            }
+        }
+        List<String> empty = List.of();
+        return new ExecutionTreeNode(
+                id, displayName, NodeType.PLUGIN, List.of(), "PLUGIN", pluginRef,
+                inputMappings, outputMappings,
+                empty, empty, empty, empty, empty, empty, empty, empty,
+                Map.of(), null, null, null);
+    }
+
     @Override
     public String runExecutionTree(String queueName, String workflowInputJson) {
+        int inputLen = workflowInputJson != null ? workflowInputJson.length() : 0;
+        String inputSnippet = workflowInputJson != null && workflowInputJson.length() > 300
+                ? workflowInputJson.substring(0, 300) + "...[truncated]"
+                : (workflowInputJson != null ? workflowInputJson : "");
+        log.info("Activity entry | runExecutionTree | queue={} | workflowInputLength={} | workflowInputSnippet={}",
+                queueName != null ? queueName : "", inputLen, inputSnippet);
         WorkflowInput workflowInput;
         try {
             workflowInput = WorkflowInput.fromJson(workflowInputJson);
         } catch (Exception e) {
             log.warn("Invalid workflow input JSON for runExecutionTree", e);
+            log.info("Activity exit | runExecutionTree | status=INVALID_INPUT | resultLength=0");
             return "";
         }
         String tenantId = OloConfig.normalizeTenantId(
@@ -437,11 +549,13 @@ public class OloKernelActivitiesImpl implements OloKernelActivities {
             }
             if (localContext == null) {
                 log.warn("No LocalContext for tenant={} queue={} (version={}); cannot run execution tree", tenantId, effectiveQueue, requestedVersion);
+                log.info("Activity exit | runExecutionTree | status=NO_CONFIG | resultLength=0");
                 return "";
             }
             PipelineConfiguration config = localContext.getPipelineConfiguration();
             if (config == null || config.getPipelines() == null || config.getPipelines().isEmpty()) {
                 log.warn("No pipelines in config for queue {}", effectiveQueue);
+                log.info("Activity exit | runExecutionTree | status=NO_PIPELINE | resultLength=0");
                 return "";
             }
             String snapshotVersionId = requestedVersion != null ? requestedVersion : (config.getVersion() != null ? config.getVersion() : "");
@@ -455,6 +569,8 @@ public class OloKernelActivitiesImpl implements OloKernelActivities {
             String transactionId = workflowInput.getRouting() != null ? workflowInput.getRouting().getTransactionId() : null;
             log.info("OloKernel runExecutionTree | transactionId={} | pipelineName={} | executionMode={} | queue={} | tenantId={} | rootNodeId={} | rootNodeType={} | rootNodeDisplayName={} | configVersion={}",
                     transactionId, pipelineName, executionMode, effectiveQueue, tenantId, rootNodeId, rootNodeType, rootNodeDisplayName, snapshotVersionId);
+            log.info("Execution tree entry | transactionId={} | pipelineName={} | rootNodeId={} | rootNodeType={}",
+                    transactionId, pipelineName, rootNodeId, rootNodeType);
             String runId = runLedger != null ? UUID.randomUUID().toString() : null;
             ExecutionConfigSnapshot snapshot = runId != null
                     ? ExecutionConfigSnapshot.of(tenantId, effectiveQueue, config, snapshotVersionId, runId)
@@ -468,7 +584,7 @@ public class OloKernelActivitiesImpl implements OloKernelActivities {
             Map<String, Object> tenantConfigMap = TenantConfigRegistry.getInstance().get(tenantId).getConfigMap();
 
             // Per-node plugin instance cache: one instance per tree node; same node in a loop reuses the same instance.
-            java.util.Map<String, ExecutablePlugin> nodeInstanceCache = new LinkedHashMap<>();
+            java.util.Map<String, Object> nodeInstanceCache = new LinkedHashMap<>();
 
             long ledgerStartTime = 0L;
             if (runLedger != null && runId != null) {
@@ -482,15 +598,27 @@ public class OloKernelActivitiesImpl implements OloKernelActivities {
             String runStatus = "FAILED";
             Throwable runFailure = null;
             try {
-                runResult = ExecutionEngine.run(snapshot, inputValues, pluginExecutor(tenantId, nodeInstanceCache), tenantConfigMap);
+                PluginExecutor executor = pluginExecutorFactory.create(tenantId, nodeInstanceCache);
+                runResult = ExecutionEngine.run(snapshot, inputValues, executor, tenantConfigMap);
                 runStatus = "SUCCESS";
+                int resultLen = runResult != null ? runResult.length() : 0;
+                String resultSnippet = runResult != null && runResult.length() > 400
+                        ? runResult.substring(0, 400) + "...[truncated]"
+                        : (runResult != null ? runResult : "");
+                log.info("Execution tree exit | transactionId={} | status={} | resultLength={} | resultSnippet={}",
+                        transactionId, runStatus, resultLen, resultSnippet);
+                log.info("Activity exit | runExecutionTree | status={} | resultLength={}", runStatus, resultLen);
                 return runResult != null ? runResult : "";
             } catch (IllegalArgumentException e) {
                 log.warn("Execution engine validation failed: {}", e.getMessage());
                 runFailure = e;
+                log.info("Execution tree exit | transactionId={} | status=VALIDATION_FAILED | resultLength=0", transactionId);
+                log.info("Activity exit | runExecutionTree | status=VALIDATION_FAILED | resultLength=0");
                 return "";
             } catch (Throwable t) {
                 runFailure = t;
+                log.info("Execution tree exit | transactionId={} | status=FAILED | error={}", transactionId, t.getMessage());
+                log.info("Activity exit | runExecutionTree | status=FAILED | resultLength=0");
                 throw t;
             } finally {
                 if (runLedger != null) {
@@ -530,43 +658,12 @@ public class OloKernelActivitiesImpl implements OloKernelActivities {
     private static void collectPluginRefs(ExecutionTreeNode node, String tenantId, Map<String, String> out) {
         if (node == null) return;
         if (node.getType() == NodeType.PLUGIN && node.getPluginRef() != null && !node.getPluginRef().isBlank()) {
-            String ver = PluginRegistry.getInstance().getContractVersion(tenantId, node.getPluginRef());
-            out.putIfAbsent(node.getPluginRef(), ver != null ? ver : "?");
+            out.putIfAbsent(node.getPluginRef(), "?");
         }
         if (node.getChildren() != null) {
             for (ExecutionTreeNode child : node.getChildren()) {
                 collectPluginRefs(child, tenantId, out);
             }
         }
-    }
-
-    private PluginInvoker.PluginExecutor pluginExecutor(String tenantId) {
-        return pluginExecutor(tenantId, null);
-    }
-
-    private PluginInvoker.PluginExecutor pluginExecutor(String tenantId, java.util.Map<String, ExecutablePlugin> nodeInstanceCache) {
-        return new PluginInvoker.PluginExecutor() {
-            @Override
-            public String execute(String pluginId, String inputsJson, String nodeId) {
-                return OloKernelActivitiesImpl.this.executePlugin(tenantId, pluginId, inputsJson, nodeId, nodeInstanceCache);
-            }
-            @Override
-            public String toJson(Map<String, Object> map) {
-                try {
-                    return MAPPER.writeValueAsString(map != null ? map : Map.of());
-                } catch (Exception e) {
-                    throw new RuntimeException("Failed to serialize plugin inputs", e);
-                }
-            }
-            @Override
-            public Map<String, Object> fromJson(String json) {
-                try {
-                    return MAPPER.readValue(json != null ? json : "{}", MAP_TYPE);
-                } catch (Exception e) {
-                    log.warn("Failed to parse plugin outputs", e);
-                    return Map.of();
-                }
-            }
-        };
     }
 }

@@ -3,9 +3,9 @@ package com.olo.features.metrics;
 import com.olo.annotations.FeaturePhase;
 import com.olo.annotations.OloFeature;
 import com.olo.annotations.ResourceCleanup;
+import com.olo.features.FinallyCall;
 import com.olo.features.NodeExecutionContext;
 import com.olo.features.PluginExecutionResult;
-import com.olo.features.PostNodeCall;
 import com.olo.features.PreNodeCall;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Timer;
@@ -23,7 +23,7 @@ import java.util.concurrent.atomic.AtomicReference;
  * and reused forever. No synchronized blocks; kernel remains untouched.
  */
 @OloFeature(name = "metrics", phase = FeaturePhase.PRE_FINALLY, applicableNodeTypes = { "*" })
-public final class MetricsFeature implements PreNodeCall, PostNodeCall, ResourceCleanup {
+public final class MetricsFeature implements PreNodeCall, FinallyCall, ResourceCleanup {
 
     private static final AtomicReference<MeterRegistry> REGISTRY = new AtomicReference<>();
 
@@ -54,7 +54,7 @@ public final class MetricsFeature implements PreNodeCall, PostNodeCall, Resource
     }
 
     @Override
-    public void after(NodeExecutionContext ctx, Object result) {
+    public void afterFinally(NodeExecutionContext ctx, Object result) {
         MeterRegistry registry = getRegistry();
         String tenant = nullToUnknown(ctx.getTenantId());
         String nodeType = ctx.getNodeType() != null && !ctx.getNodeType().isBlank() ? ctx.getNodeType() : ctx.getType();

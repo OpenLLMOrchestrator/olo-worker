@@ -27,7 +27,13 @@ public final class ExecuteNodeDynamicActivity implements DynamicActivity {
         String variableMapJson = args.get(2, String.class);
         String queueName = args.get(3, String.class);
         String workflowInputJson = args.get(4, String.class);
+        String dynamicStepsJson;
+        try {
+            dynamicStepsJson = args.get(5, String.class);
+        } catch (Exception e) {
+            dynamicStepsJson = null;
+        }
         return delegate.executeNode(activityType, planJson, nodeId, variableMapJson,
-                queueName != null ? queueName : "", workflowInputJson);
+                queueName != null ? queueName : "", workflowInputJson, dynamicStepsJson);
     }
 }

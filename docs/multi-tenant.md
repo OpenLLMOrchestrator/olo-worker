@@ -41,7 +41,7 @@ Each tenant can have a **config** object in `olo:tenants`. At bootstrap, configs
 
 - **Plugins**: `ModelExecutorPlugin.execute(inputs, TenantConfig)` receives tenant config. Use for 3rd party URLs, API keys, or restrictions (e.g. `ollamaBaseUrl`, `ollamaModel` override for Ollama plugin).
 - **Features**: `NodeExecutionContext.getTenantId()` and `getTenantConfigMap()` expose tenant id and the same config map for tenant-specific restrictions or behavior in pre/post hooks.
-- **Quota**: `config.quota.softLimit` and `config.quota.hardLimit` (numbers) are used by **QuotaFeature** (PRE phase): if current usage (from Redis `<tenantId>:olo:quota:activeWorkflows`) exceeds soft limit (with optional 5% burst) or hard limit, the feature throws **QuotaExceededException** (fail-fast). Add `"quota"` to pipeline scope.features to enable. INCR at run start and DECR in `finally` ensure the counter does not drift.
+- **Quota**: `config.quota.softLimit` and `config.quota.hardLimit` (numbers) are used by **QuotaFeature** (PRE phase): if current usage (from Redis `<tenantId>:olo:quota:activeWorkflows`) exceeds soft limit (with optional 5% burst) or hard limit, the feature throws **QuotaExceededException** (fail-fast). Add `"quota"` to pipeline scope.features to enable. **QuotaFeature must only run on the root node and once per run**—do not attach it per node. INCR at run start and DECR in `finally` ensure the counter does not drift.
 - **Metrics**: `config.metrics.includeModelTag` (boolean, default false) controls whether **MetricsFeature** adds a `modelId` tag to plugin metrics. Set to `true` only when the model set is small and fixed; dynamic model names can explode Prometheus cardinality.
 
 Example `olo:tenants` with config:

@@ -3,8 +3,8 @@ package com.olo.ledger;
 import com.olo.annotations.FeaturePhase;
 import com.olo.annotations.OloFeature;
 import com.olo.annotations.ResourceCleanup;
+import com.olo.features.FinallyCall;
 import com.olo.features.NodeExecutionContext;
-import com.olo.features.PostNodeCall;
 import com.olo.features.PreNodeCall;
 
 /**
@@ -14,7 +14,7 @@ import com.olo.features.PreNodeCall;
  * Observe-only; no-op for persistence (activity owns run-level records).
  */
 @OloFeature(name = "ledger-run", phase = FeaturePhase.PRE_FINALLY, applicableNodeTypes = { "SEQUENCE" })
-public final class RunLevelLedgerFeature implements PreNodeCall, PostNodeCall, ResourceCleanup {
+public final class RunLevelLedgerFeature implements PreNodeCall, FinallyCall, ResourceCleanup {
 
     private static final ThreadLocal<Boolean> ROOT_VISITED = ThreadLocal.withInitial(() -> false);
 
@@ -28,7 +28,7 @@ public final class RunLevelLedgerFeature implements PreNodeCall, PostNodeCall, R
     }
 
     @Override
-    public void after(NodeExecutionContext context, Object nodeResult) {
+    public void afterFinally(NodeExecutionContext context, Object nodeResult) {
         // Run end is done in activity (finally block) with final output and status
     }
 

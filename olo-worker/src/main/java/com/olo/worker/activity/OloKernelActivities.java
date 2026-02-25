@@ -73,16 +73,19 @@ public interface OloKernelActivities {
     /**
      * Executes a single node (for per-node workflow path). Activities are leaf nodes (no children) or feature-type nodes;
      * activity type is "NODETYPE" or "PLUGIN:pluginRef" (e.g. "PLUGIN:GPT4_EXECUTOR"). Temporal event history shows this as "ExecuteNode".
+     * When executing a planner-generated step (nodeId not in static pipeline), pass the JSON array of dynamic steps
+     * in dynamicStepsJson so the activity can resolve and run that step.
      *
-     * @param activityType   logical type for this node (NODETYPE or PLUGIN:pluginRef for leaf/activity nodes)
-     * @param planJson       plan JSON from getExecutionPlan
-     * @param nodeId         node id to execute
-     * @param variableMapJson current variable map JSON
-     * @param queueName      task queue name
+     * @param activityType     logical type for this node (NODETYPE or PLUGIN:pluginRef for leaf/activity nodes)
+     * @param planJson         plan JSON from getExecutionPlan
+     * @param nodeId            node id to execute
+     * @param variableMapJson  current variable map JSON
+     * @param queueName        task queue name
      * @param workflowInputJson workflow input JSON
-     * @return updated variable map JSON
+     * @param dynamicStepsJson optional; when non-null, used to resolve nodeId when it is not in the pipeline (e.g. planner steps)
+     * @return updated variable map JSON, or for PLANNER a JSON object with variableMapJson and dynamicSteps
      */
     @ActivityMethod
     String executeNode(String activityType, String planJson, String nodeId, String variableMapJson,
-                       String queueName, String workflowInputJson);
+                       String queueName, String workflowInputJson, String dynamicStepsJson);
 }

@@ -1,5 +1,7 @@
 package com.olo.worker.config;
 
+import com.olo.bootstrap.validation.ConfigCompatibilityValidator;
+import com.olo.bootstrap.validation.ConfigIncompatibleException;
 import com.olo.executiontree.config.PipelineConfiguration;
 import com.olo.executiontree.load.GlobalConfigurationContext;
 import com.olo.features.FeatureRegistry;
@@ -10,10 +12,10 @@ import com.olo.plugin.PluginRegistry;
  * during bootstrap or when configuration changes, and only then accept the config.
  *
  * <ul>
- *   <li><b>Bootstrap:</b> Validation runs in {@link com.olo.worker.OloWorkerApplication} after config load
- *       and after plugins/features are registered; startup fails if any config is incompatible.</li>
+ *   <li><b>Bootstrap:</b> Validation runs in {@link com.olo.bootstrap.OloBootstrap#initializeWorker()} after
+ *       plugins/features are registered; startup fails if any config is incompatible.</li>
  *   <li><b>Configuration change:</b> Before putting new config into the global context (e.g. hot reload,
- *       admin update), call {@link #validateAndPut(String, PipelineConfiguration)} so version checks
+ *       admin update), call {@link #validateAndPut(String, String, PipelineConfiguration)} so version checks
  *       run before the config is stored. If validation fails, config is not put and an exception is thrown.</li>
  * </ul>
  *

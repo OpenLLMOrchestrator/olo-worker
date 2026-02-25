@@ -3,8 +3,9 @@ package com.olo.features;
 /**
  * Contract for feature logic that runs before a tree node and again after (success, error, and finally).
  * Corresponds to phase {@link com.olo.annotations.FeaturePhase#PRE_FINALLY}.
- * Implement this when the feature needs to run in all four moments: before, after success, after error, and finally.
- * Alternatively implement {@link PreNodeCall} plus {@link PostSuccessCall}, {@link PostErrorCall}, and/or {@link FinallyCall} as needed.
+ * Use {@link #afterSuccess} / {@link #afterError} for <b>heavy lifting</b> (exception-prone, success-vs-error);
+ * use {@link #afterFinally} for <b>non–exception-prone</b> logic (logging, metrics, cleanup). Alternatively
+ * implement {@link PreNodeCall} plus {@link PostSuccessCall}, {@link PostErrorCall}, and/or {@link FinallyCall} as needed.
  */
 public interface PreFinallyCall extends PreNodeCall {
 

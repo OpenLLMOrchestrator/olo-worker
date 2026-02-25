@@ -1,11 +1,16 @@
 package com.olo.features;
 
-import java.util.Collections;
 import java.util.Map;
 import java.util.Objects;
 
 /**
  * Context passed to feature hooks when a tree node is about to run (pre) or has just run (post).
+ * <p>
+ * <b>Immutable.</b> All fields and the maps returned by {@link #getAttributes()} and
+ * {@link #getTenantConfigMap()} are read-only. Community features must not mutate execution state;
+ * they may only read context, log, and emit metrics. The executor does not enforce this beyond
+ * immutability—callers must not modify the context or the returned maps.
+ * <p>
  * Provides node identity and type so the feature can decide what to do; optional attributes
  * for extensibility. Includes tenant id and tenant-specific config (e.g. restrictions, 3rd party params).
  * For PLUGIN nodes, queueName and pluginId are set for metrics. Execution outcome is set for post phases:

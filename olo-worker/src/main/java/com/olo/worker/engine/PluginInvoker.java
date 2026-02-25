@@ -3,6 +3,7 @@ package com.olo.worker.engine;
 import com.olo.executiontree.tree.ExecutionTreeNode;
 import com.olo.executiontree.tree.ParameterMapping;
 import com.olo.features.PluginExecutionResult;
+import com.olo.plugin.PluginExecutor;
 
 import java.util.LinkedHashMap;
 import java.util.Map;
@@ -12,7 +13,7 @@ import java.util.Map;
  * Reads variables from the engine, calls the plugin, writes outputs back.
  * Measures duration at the exact execution boundary and returns {@link PluginExecutionResult}
  * so features get duration and success without recomputation (and so retry/wrapping logic
- * does not skew timing).
+ * does not skew timing). Uses the protocol {@link PluginExecutor} so the worker depends on contract only.
  */
 public final class PluginInvoker {
 
@@ -86,16 +87,16 @@ public final class PluginInvoker {
         return firstOutput;
     }
 
-    /** Abstraction for executing a plugin and JSON serialization (e.g. activity implementation). */
-    public interface PluginExecutor {
-        /** Executes the plugin; when {@code nodeId} is non-null, per-node instance is used (same nodeId → same instance in a run). */
-        String execute(String pluginId, String inputsJson, String nodeId);
-
-        default String execute(String pluginId, String inputsJson) {
-            return execute(pluginId, inputsJson, null);
-        }
-
-        String toJson(Map<String, Object> map);
-        Map<String, Object> fromJson(String json);
+    /**
+     * Invokes a plugin with a raw input map and returns the full output map.
+     * Used when the caller needs the complete plugin response (e.g. SUBTREE_CREATOR returns variablesToInject + steps).
+     */
+    public Map<String, Object> invokeWithInputMap(String pluginRef, Map<String, Object> inputMap) {
+        if (pluginRef == null || pluginRef.isBlank()) return Map.of();
+        String inputsJson = pluginExecutor.toJson(inputMap != null ? inputMap : Map.of());
+        String outputsJson = pluginExecutor.execute(pluginRef, inputsJson, null);
+        Map<String, Object> outputs = pluginExecutor.fromJson(outputsJson);
+        return outputs != null ? outputs : Map.of();
     }
+
 }

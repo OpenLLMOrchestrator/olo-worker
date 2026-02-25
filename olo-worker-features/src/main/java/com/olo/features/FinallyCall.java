@@ -3,7 +3,10 @@ package com.olo.features;
 /**
  * Contract for feature logic that runs after a tree node completes (success or error).
  * Corresponds to phase {@link com.olo.annotations.FeaturePhase#FINALLY}.
- * Implement this (and optionally other phase contracts) and annotate the class with {@link com.olo.annotations.OloFeature}.
+ * Prefer this for <b>non–exception-prone</b> code: logging, metrics, lightweight cleanup, or any logic
+ * that should run regardless of success/error without throwing. For heavy lifting or logic that may
+ * throw and needs success-vs-error handling, use {@link PostSuccessCall} / {@link PostErrorCall}
+ * (or {@link PreFinallyCall}) instead.
  */
 @FunctionalInterface
 public interface FinallyCall {

@@ -5,9 +5,9 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.olo.annotations.FeaturePhase;
 import com.olo.annotations.OloFeature;
 import com.olo.annotations.ResourceCleanup;
+import com.olo.features.FinallyCall;
 import com.olo.features.NodeExecutionContext;
 import com.olo.features.PluginExecutionResult;
-import com.olo.features.PostNodeCall;
 import com.olo.features.PreNodeCall;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -21,7 +21,7 @@ import java.util.Map;
  * extracts AI cost metrics (token counts, model name, provider) from plugin output and persists them.
  */
 @OloFeature(name = "ledger-node", phase = FeaturePhase.PRE_FINALLY, applicableNodeTypes = { "*" })
-public final class NodeLedgerFeature implements PreNodeCall, PostNodeCall, ResourceCleanup {
+public final class NodeLedgerFeature implements PreNodeCall, FinallyCall, ResourceCleanup {
 
     private static final Logger log = LoggerFactory.getLogger(NodeLedgerFeature.class);
     private static final ObjectMapper MAPPER = new ObjectMapper();
@@ -65,7 +65,7 @@ public final class NodeLedgerFeature implements PreNodeCall, PostNodeCall, Resou
     }
 
     @Override
-    public void after(NodeExecutionContext context, Object nodeResult) {
+    public void afterFinally(NodeExecutionContext context, Object nodeResult) {
         String runId = LedgerContext.getRunId();
         if (runId == null || runId.isBlank()) {
             return;

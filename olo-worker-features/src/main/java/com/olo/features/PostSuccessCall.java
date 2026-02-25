@@ -3,7 +3,9 @@ package com.olo.features;
 /**
  * Contract for feature logic that runs after a tree node executes successfully.
  * Corresponds to phase {@link com.olo.annotations.FeaturePhase#POST_SUCCESS}.
- * Implement this (and optionally other phase contracts) and annotate the class with {@link com.olo.annotations.OloFeature}.
+ * Prefer this (and {@link PostErrorCall}) for <b>heavy lifting</b>: logic that may throw, has significant
+ * side effects, or needs to react specifically to success vs error. For lightweight, non–exception-prone
+ * code (e.g. logging, metrics), use {@link FinallyCall} or {@link PreFinallyCall#afterFinally} instead.
  */
 @FunctionalInterface
 public interface PostSuccessCall {

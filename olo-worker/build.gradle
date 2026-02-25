@@ -17,16 +17,19 @@ repositories {
 
 dependencies {
     implementation project(':olo-annotations')
+    implementation project(':olo-worker-protocol')
     implementation project(':olo-worker-bootstrap')
     implementation project(':olo-worker-configuration')
     implementation project(':olo-worker-execution-context')
     implementation project(':olo-worker-execution-tree')
     implementation project(':olo-worker-features')
     implementation project(':olo-worker-input')
-    implementation project(':olo-worker-plugin')
+    implementation project(':olo-worker-tools')
     implementation project(':olo-internal-features')
     implementation project(':olo-run-ledger')
     implementation project(':olo-internal-plugins')
+    implementation project(':olo-internal-tools')
+    implementation project(':olo-planner')
     implementation 'io.temporal:temporal-sdk:1.24.1'
     runtimeOnly 'org.slf4j:slf4j-simple:2.0.9'
     testImplementation 'io.temporal:temporal-testing:1.24.1'

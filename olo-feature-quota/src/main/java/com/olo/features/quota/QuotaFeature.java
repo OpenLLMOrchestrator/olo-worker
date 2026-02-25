@@ -13,9 +13,18 @@ import org.slf4j.LoggerFactory;
 import java.util.Map;
 
 /**
- * PRE-phase feature that checks tenant quota before execution. Runs on the pipeline root
- * (first SEQUENCE node); reads current usage from Redis and compares with tenant soft/hard limits
- * from {@code tenantConfig.quota}. Fail fast: throws {@link QuotaExceededException} if exceeded (no blocking).
+ * PRE-phase feature that checks tenant quota before execution.
+ * <p>
+ * <b>Must only run on the root node and only once per run.</b> The activity does INCR activeWorkflows
+ * before running the execution engine; this feature runs in PRE on the first SEQUENCE (root). If quota
+ * is exceeded it throws before any plugin runs; DECR runs in the
+ * activity's finally, so there is no drift. Do <b>not</b> attach this feature per node (e.g. via
+ * node-level {@code preExecution} or {@code features})—enable it only via pipeline {@code scope.features}
+ * so that it is invoked only on the root SEQUENCE. Otherwise quota would be checked (or misused) on
+ * every applicable node.
+ * <p>
+ * Reads current usage from Redis and compares with tenant soft/hard limits from {@code tenantConfig.quota}.
+ * Fail fast: throws {@link QuotaExceededException} if exceeded (no blocking).
  */
 @OloFeature(name = "quota", phase = FeaturePhase.PRE, applicableNodeTypes = { "SEQUENCE" })
 public final class QuotaFeature implements PreNodeCall, ResourceCleanup {

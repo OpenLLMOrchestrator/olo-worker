@@ -25,6 +25,13 @@ public final class ContractType {
      */
     public static final String REDUCER = "REDUCER";
 
+    /**
+     * Execution tree creator: input is plan text (e.g. planner model output); returns a subtree to run.
+     * Input: "planText" (string). Output: "variablesToInject" (Map&lt;String, Object&gt;), "steps" (List of Map with "pluginRef", "prompt").
+     * The engine attaches the returned subtree to execution and runs it like other nodes.
+     */
+    public static final String SUBTREE_CREATOR = "SUBTREE_CREATOR";
+
     private ContractType() {
     }
 }

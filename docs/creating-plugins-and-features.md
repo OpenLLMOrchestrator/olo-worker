@@ -57,10 +57,14 @@ To support this, the registry stores the **PluginProvider** (not a single plugin
 - **Is a plugin required to be thread-safe?**  
   **Today: no.** The engine does not invoke a plugin from multiple threads for the same run. **If the engine later introduces parallel node execution** (e.g. concurrent execution of sibling nodes), plugins may be invoked from multiple threads. To avoid future race conditions and to be forward-compatible, **implement plugins as thread-safe** where they use mutable state (e.g. synchronize or use thread-safe data structures). Do not assume single-threaded invocation in the long term.
 
+- **Do not assume execution order across loop iterations.**  
+  Today the engine runs sequentially, so the same node in a loop sees invocations in order. **Future engine evolution** (e.g. parallel execution of siblings) may change this. Plugins must **not** rely on execution order across loop iterations; stateful accumulation (e.g. across iterations of the same node) may become unsafe under parallel execution. Implement in a thread-safe way and avoid order-dependent state.
+
 - **Summary:**  
   - Plugin instance = run-scoped (per node; same node in a loop reuses the same instance).  
   - Engine invokes a given node sequentially; no concurrent calls to the same instance today.  
   - Plugins must **not** assume cross-node instance sharing.  
+  - Plugins must **not** assume execution order across loop iterations (forward-compatibility with parallel execution).  
   - Plugins should be **thread-safe** if they hold mutable state, so they remain safe if the engine adds parallel execution later.
 
 ### 1.2 Step-by-Step: Create a New Plugin
@@ -353,7 +357,7 @@ Features are **cross-cutting**: they run before and/or after execution tree node
 
 | Component | Location | Role |
 |-----------|----------|------|
-| **Contracts** | `olo-worker-features` | `PreNodeCall` (`before(NodeExecutionContext)`), `PostNodeCall` (`after(NodeExecutionContext, Object nodeResult)`) |
+| **Contracts** | `olo-worker-features` | `PreNodeCall` (`before(NodeExecutionContext)`), `FinallyCall` (`afterFinally(...)`), `PreFinallyCall` (before + afterSuccess/afterError/afterFinally) |
 | **Metadata** | `olo-annotations` | `@OloFeature(name, phase, applicableNodeTypes, contractVersion)` |
 | **Registry** | `olo-worker-features` | `FeatureRegistry`: register by instance; lookup by name; resolve by node type and pipeline scope |
 | **Registration** | Worker / olo-internal-features | Internal: **InternalFeatures.registerInternalFeatures(...)** (in **olo-internal-features**). Community: `FeatureRegistry.getInstance().registerCommunity(new MyFeature())` (or `registerInternal(...)` for kernel-privileged). |
@@ -367,6 +371,11 @@ Features are **cross-cutting**: they run before and/or after execution tree node
 - **FINALLY** – runs after the node (success or error).
 - **PRE_FINALLY** – runs both before and after (like PRE + FINALLY).
 
+**When to use which phase:**
+
+- **POST_SUCCESS / POST_ERROR** — Use for **heavy lifting**: logic that may throw, has significant side effects, or must react specifically to success vs error (e.g. conditional persistence, retry bookkeeping, error reporting). Implement **PostSuccessCall** and/or **PostErrorCall** (or **PreFinallyCall** with afterSuccess/afterError).
+- **FINALLY / PRE_FINALLY** — Use for **non–exception-prone** code to achieve the functionality: logging, metrics, lightweight cleanup, or any logic that should run regardless of outcome without throwing. Implement **FinallyCall** or **PreFinallyCall** (afterFinally). This keeps the finally phase predictable and avoids exception handling inside post hooks.
+
 **Applicability:** A feature can be limited to certain node types via `applicableNodeTypes` (e.g. `"SEQUENCE"`, `"PLUGIN"`, `"*"` for all). Pipeline scope lists which features are **enabled** for that pipeline (by feature id). The resolver merges node-level lists, scope features, and debug-queue behavior.
 
 #### 2.1.1 Feature privilege (internal vs community)
@@ -374,7 +383,7 @@ Features are **cross-cutting**: they run before and/or after execution tree node
 Features have two privilege levels (like plugins).
 
 - **Internal (kernel-privileged):** Can block execution, mutate context, affect failure semantics, persist ledger, enforce quotas, audit, run in any phase. Registered via **registerInternal(...)** or **register(...)**. Olo-controlled; internal features are aggregated in **olo-internal-features** and registered in **InternalFeatures.registerInternalFeatures(...)** at worker startup. If an internal feature throws in a pre hook, execution fails.
-- **Community (restricted):** Must be **observer-only**: may read context, log, emit metrics, append attributes; must **not** block execution, change the execution plan, or throw to fail the run. Registered via **FeatureRegistry.registerCommunity(...)**. If a community feature throws, the executor catches, logs, and continues. Use **ObserverPreNodeCall** / **ObserverPostNodeCall** in contracts to document observer-only semantics.
+- **Community (restricted):** Must be **observer-only**: may read context, log, emit metrics, append attributes; must **not** block execution, change the execution plan, throw to fail the run, or **mutate execution state**. **NodeExecutionContext** is immutable (read-only); community features must not mutate it. Registered via **FeatureRegistry.registerCommunity(...)**. If a community feature throws, the executor catches, logs, and continues. Use **ObserverPreNodeCall** / **ObserverPostNodeCall** in contracts to document observer-only semantics.
 
 See **docs/architecture-and-features.md** § 3.2.2 for the full contract.
 
@@ -427,9 +436,9 @@ See **docs/architecture-and-features.md** § 3.2.2 for the full contract.
   - **phase** – when to run: `PRE`, `POST_SUCCESS`, `POST_ERROR`, `FINALLY`, or `PRE_FINALLY`.
   - **applicableNodeTypes** – node type patterns (e.g. `"*"` for all, `"SEQUENCE"`, `"PLUGIN"`).
   - **contractVersion** – optional; for config compatibility (e.g. `"1.0"`).
-- Implement **PreNodeCall** and/or **PostNodeCall** depending on phase:
+- Implement **PreNodeCall** and/or **FinallyCall** (or **PostSuccessCall** / **PostErrorCall** / **PreFinallyCall**) depending on phase:
   - **before(NodeExecutionContext context)** – pre logic (e.g. quota check, logging).
-  - **after(NodeExecutionContext context, Object nodeResult)** – post logic (e.g. metrics, cleanup).
+  - **afterFinally(NodeExecutionContext context, Object nodeResult)** – post logic that runs after the node completes (success or error); for phase-specific hooks use **PostSuccessCall**, **PostErrorCall**, or **PreFinallyCall**.
 - Optional: implement **ResourceCleanup** and override **onExit()** for shutdown (e.g. clear thread locals, close resources).
 
 **NodeExecutionContext** provides: `nodeId`, `type`, `nodeType`, `tenantId`, `tenantConfigMap`, `queueName`, `pluginId`, `executionSucceeded`, `attributes`.
@@ -442,8 +451,8 @@ package com.olo.features.myfeature;
 import com.olo.annotations.FeaturePhase;
 import com.olo.annotations.OloFeature;
 import com.olo.annotations.ResourceCleanup;
+import com.olo.features.FinallyCall;
 import com.olo.features.NodeExecutionContext;
-import com.olo.features.PostNodeCall;
 import com.olo.features.PreNodeCall;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -454,7 +463,7 @@ import org.slf4j.LoggerFactory;
     applicableNodeTypes = { "*" },
     contractVersion = "1.0"
 )
-public final class MyFeature implements PreNodeCall, PostNodeCall, ResourceCleanup {
+public final class MyFeature implements PreNodeCall, FinallyCall, ResourceCleanup {
 
     private static final Logger log = LoggerFactory.getLogger(MyFeature.class);
 
@@ -464,7 +473,7 @@ public final class MyFeature implements PreNodeCall, PostNodeCall, ResourceClean
     }
 
     @Override
-    public void after(NodeExecutionContext context, Object nodeResult) {
+    public void afterFinally(NodeExecutionContext context, Object nodeResult) {
         log.info("[myfeature] post nodeId={} type={} succeeded={}",
             context.getNodeId(), context.getType(), context.isExecutionSucceeded());
     }
@@ -529,7 +538,7 @@ See [architecture-and-features.md § 3.2.1](architecture-and-features.md#321-fea
 ### 2.5 Reference: Existing Features
 
 - **olo-feature-debug** – `DebuggerFeature`: PRE_FINALLY, logs before/after every node; applicable to `*`.
-- **olo-feature-quota** – `QuotaFeature`: PRE, runs on root SEQUENCE; checks tenant quota from config and Redis; throws `QuotaExceededException` if exceeded.
+- **olo-feature-quota** – `QuotaFeature`: PRE, runs on root SEQUENCE only. **Must only run on the root node and once per run**—enable via pipeline scope.features only; do not attach per node (e.g. node-level preExecution/features). Checks tenant quota from config and Redis; throws `QuotaExceededException` if exceeded.
 - **olo-feature-metrics** – `MetricsFeature`: PRE_FINALLY, increments counters and records plugin execution metrics (duration, tokens, etc.); applicable to `*`.
 - **olo-run-ledger** – `RunLevelLedgerFeature`, `NodeLedgerFeature`: ledger-run on root, ledger-node on every node; persist run/node records when run ledger is enabled.
 
@@ -539,7 +548,7 @@ See [architecture-and-features.md § 3.2.1](architecture-and-features.md#321-fea
 
 | Goal | Plugin | Feature |
 |------|--------|---------|
-| **Contract** | `ExecutablePlugin` (or specific: ModelExecutor, Embedding, VectorStore, ImageGeneration) | `PreNodeCall` and/or `PostNodeCall` |
+| **Contract** | `ExecutablePlugin` (or specific: ModelExecutor, Embedding, VectorStore, ImageGeneration) | `PreNodeCall` and/or `FinallyCall` (or PostSuccessCall, PostErrorCall, PreFinallyCall) |
 | **Metadata** | None (id/contract from PluginProvider) | `@OloFeature(name, phase, applicableNodeTypes)` |
 | **Discovery** | **Internal:** explicit registration in plugin module (e.g. `InternalPlugins`), **not** ServiceLoader. **Community:** ServiceLoader **per isolated JAR only** in `OLO_PLUGINS_DIR`; no system/classpath scanning. | Explicit registration in `OloWorkerApplication` |
 | **Worker dependency** | Internal: via `olo-internal-plugins`. Community: JARs in `OLO_PLUGINS_DIR` only; no worker classpath dependency. | `implementation project(':olo-feature-xxx')` and `register(new MyFeature())` |

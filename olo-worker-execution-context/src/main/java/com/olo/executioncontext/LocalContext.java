@@ -43,12 +43,15 @@ public final class LocalContext {
 
     /**
      * Creates a local context for the given tenant, queue and optional config version (execution version pinning).
-     * When {@code configVersion} is non-null and non-blank, the loaded config's version must match; otherwise returns null.
+     * When {@code configVersion} is non-null and non-blank, the loaded config's version must match exactly;
+     * otherwise throws {@link ConfigVersionMismatchException}. There is no multi-version store—only the
+     * config loaded at bootstrap is used. Resolution policy: requested version != loaded version → run fails.
      *
      * @param tenantKey    tenant id
      * @param queueName    task queue name
      * @param configVersion optional version to pin to (e.g. from routing); null = no version check
-     * @return local context with a deep copy, or null if no config or version mismatch
+     * @return local context with a deep copy, or null if no config is loaded for the tenant/queue
+     * @throws ConfigVersionMismatchException if configVersion is set and does not match the loaded config version
      */
     public static LocalContext forQueue(String tenantKey, String queueName, String configVersion) {
         Objects.requireNonNull(queueName, "queueName");
@@ -62,8 +65,7 @@ public final class LocalContext {
         if (configVersion != null && !configVersion.isBlank()) {
             String loadedVersion = source != null ? source.getVersion() : null;
             if (loadedVersion == null || !loadedVersion.trim().equals(configVersion.trim())) {
-                log.warn("Config version mismatch for tenant={} queue={}: requested={}, loaded={}", tenant, queueName, configVersion, loadedVersion);
-                return null;
+                throw new ConfigVersionMismatchException(configVersion.trim(), loadedVersion != null ? loadedVersion : "(none)");
             }
         }
         PipelineConfiguration deepCopy = deepCopy(source);

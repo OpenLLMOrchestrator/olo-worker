@@ -11,8 +11,13 @@ import com.olo.features.ResolvedPrePost;
 import com.olo.ledger.LedgerContext;
 import com.olo.worker.engine.PluginInvoker;
 import com.olo.worker.engine.VariableEngine;
+import com.olo.worker.engine.runtime.RuntimeExecutionTree;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
+import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Future;
 
@@ -22,6 +27,8 @@ import java.util.concurrent.Future;
  * and type dispatch to NodeExecutionDispatcher.
  */
 public final class NodeExecutor {
+
+    private static final Logger log = LoggerFactory.getLogger(NodeExecutor.class);
 
     private final ExecutionType executionType;
     private final ExecutorService executor;
@@ -52,13 +59,116 @@ public final class NodeExecutor {
     }
 
     /**
+     * Tree-driven execution: single source of truth. One loop, no special cases.
+     * <pre>
+     *   while (true) {
+     *     nextId = tree.findNextExecutable();
+     *     if (nextId == null) break;
+     *     dispatch(node);   // PLANNER only mutates tree (attachChildren); never runs children here
+     *     tree.markCompleted(nextId);
+     *   }
+     * </pre>
+     * Do NOT execute planner children inline — always return to this loop so findNextExecutable picks them.
+     */
+    public void runWithTree(RuntimeExecutionTree runtimeTree, PipelineDefinition pipeline,
+                            VariableEngine variableEngine, String queueName) {
+        if (runtimeTree == null || runtimeTree.getRootId() == null) return;
+        if (log.isInfoEnabled()) {
+            log.info("Tree loop started | rootId={}", runtimeTree.getRootId());
+        }
+        if (ledgerRunId != null && !ledgerRunId.isBlank()) {
+            LedgerContext.setRunId(ledgerRunId);
+        }
+        try {
+            int iteration = 0;
+            while (true) {
+                iteration++;
+                if (log.isInfoEnabled()) {
+                    log.info("Tree loop step 1 | iteration={} | findNextExecutable", iteration);
+                }
+                String nextId = runtimeTree.findNextExecutable();
+                if (nextId == null) {
+                    if (log.isInfoEnabled()) {
+                        log.info("Tree loop step 2 | iteration={} | no more executable nodes | loop finished", iteration);
+                    }
+                    break;
+                }
+                ExecutionTreeNode node = runtimeTree.getDefinition(nextId);
+                if (node != null && log.isInfoEnabled()) {
+                    log.info("Tree loop step 3 | iteration={} | nextId={} type={} displayName={} | executing", iteration, nextId, node.getType(), node.getDisplayName());
+                }
+                if (node == null) {
+                    if (log.isInfoEnabled()) log.info("Tree loop step 4 | node definition null for id={} | markCompleted and continue", nextId);
+                    runtimeTree.markCompleted(nextId);
+                    continue;
+                }
+                if (log.isInfoEnabled()) {
+                    log.info("Tree loop step 5 | runOneNodeInTree | nodeId={} type={}", nextId, node.getType());
+                }
+                runOneNodeInTree(node, pipeline, variableEngine, queueName, runtimeTree);
+                runtimeTree.markCompleted(nextId);
+                if (log.isInfoEnabled()) {
+                    log.info("Tree loop step 6 | markCompleted | nodeId={} | iteration={}", nextId, iteration);
+                }
+            }
+        } finally {
+            if (ledgerRunId != null && !ledgerRunId.isBlank()) {
+                LedgerContext.clear();
+            }
+        }
+    }
+
+    /**
+     * Runs the PLANNER node only (model + parse + inject variables). Returns the list of step nodes
+     * without running them. Used when each step is scheduled as a separate Temporal activity.
+     */
+    public List<ExecutionTreeNode> executePlannerOnly(ExecutionTreeNode node, PipelineDefinition pipeline,
+                                                      VariableEngine variableEngine, String queueName) {
+        if (node == null || node.getType() != NodeType.PLANNER) return List.of();
+        if (ledgerRunId != null && !ledgerRunId.isBlank()) {
+            LedgerContext.setRunId(ledgerRunId);
+        }
+        try {
+            FeatureRegistry registry = FeatureRegistry.getInstance();
+            ResolvedPrePost resolved = FeatureResolver.resolve(node, queueName, pipeline.getScope(), registry);
+            NodeExecutionContext context = new NodeExecutionContext(
+                    node.getId(), node.getType().getTypeName(), node.getNodeType(), null, tenantId, tenantConfigMap,
+                    queueName, null, null);
+            featureRunner.runPre(resolved, context, registry);
+            List<ExecutionTreeNode> steps = dispatcher.runPlannerReturnSteps(node, pipeline, variableEngine, queueName);
+            featureRunner.runPostSuccess(resolved, context.withExecutionSucceeded(true), null, registry);
+            return steps;
+        } catch (Throwable t) {
+            log.warn("Planner-only execution failed: nodeId={} error={}", node.getId(), t.getMessage(), t);
+            FeatureRegistry registry = FeatureRegistry.getInstance();
+            ResolvedPrePost resolved = FeatureResolver.resolve(node, queueName, pipeline.getScope(), registry);
+            NodeExecutionContext context = new NodeExecutionContext(
+                    node.getId(), node.getType().getTypeName(), node.getNodeType(), null, tenantId, tenantConfigMap,
+                    queueName, null, null);
+            featureRunner.runPostError(resolved, context.withExecutionSucceeded(false), null, registry);
+            throw t;
+        } finally {
+            if (ledgerRunId != null && !ledgerRunId.isBlank()) {
+                LedgerContext.clear();
+            }
+        }
+    }
+
+    /**
      * Executes a single node only (no recursion). Used for per-node Temporal activities
-     * so event history shows nodetype:plugin name. Runs pre, then node logic (PLUGIN = invoke;
+     * and for dynamic (planner-generated) steps. Runs pre, then node logic (PLUGIN = invoke;
      * SEQUENCE/IF/etc. = no-op), then post.
+     * <p>
+     * PLANNER nodes must not be executed here; the activity uses {@link #executePlannerOnly} for PLANNER
+     * and then schedules each returned step as a separate activity.
      */
     public void executeSingleNode(ExecutionTreeNode node, PipelineDefinition pipeline,
                                   VariableEngine variableEngine, String queueName) {
         if (node == null) return;
+        if (node.getType() == NodeType.PLANNER) {
+            throw new IllegalStateException(
+                    "PLANNER must be executed via executePlannerOnly when using per-node activities. nodeId=" + node.getId());
+        }
         if (ledgerRunId != null && !ledgerRunId.isBlank()) {
             LedgerContext.setRunId(ledgerRunId);
         }
@@ -94,6 +204,7 @@ public final class NodeExecutor {
                 featureRunner.runPostSuccess(resolved, context.withExecutionSucceeded(true), nodeResult, registry);
             }
         } catch (Throwable t) {
+            log.warn("Node execution failed: nodeId={} type={} error={}", node.getId(), node.getType() != null ? node.getType().getTypeName() : null, t.getMessage(), t);
             if (isActivity) {
                 featureRunner.runPostError(resolved, context.withExecutionSucceeded(false), null, registry);
             }
@@ -176,6 +287,65 @@ public final class NodeExecutor {
                 featureRunner.runPostSuccess(resolved, context.withExecutionSucceeded(true), nodeResult, registry);
             }
         } catch (Throwable t) {
+            if (isActivity) {
+                featureRunner.runPostError(resolved, context.withExecutionSucceeded(false), null, registry);
+            }
+            throw t;
+        } finally {
+            if (isActivity) {
+                featureRunner.runFinally(resolved, context.withExecutionSucceeded(executionSucceeded), nodeResult, registry);
+            }
+            if (log.isInfoEnabled()) {
+                log.info("Tree runOneNodeInTree done | nodeId={} type={}", node.getId(), node.getType());
+            }
+        }
+    }
+
+    private void runSubtree(RuntimeExecutionTree tree, String fromNodeId, PipelineDefinition pipeline,
+                           VariableEngine variableEngine, String queueName) {
+        if (tree == null || fromNodeId == null) return;
+        while (true) {
+            String nextId = tree.findNextExecutable();
+            if (nextId == null) break;
+            if (!tree.isDescendant(nextId, fromNodeId)) break;
+            ExecutionTreeNode n = tree.getDefinition(nextId);
+            if (n == null) {
+                tree.markCompleted(nextId);
+                continue;
+            }
+            runOneNodeInTree(n, pipeline, variableEngine, queueName, tree);
+            tree.markCompleted(nextId);
+        }
+    }
+
+    private void runOneNodeInTree(ExecutionTreeNode node, PipelineDefinition pipeline,
+                                 VariableEngine variableEngine, String queueName, RuntimeExecutionTree runtimeTree) {
+        Objects.requireNonNull(runtimeTree, "runtimeTree must not be null so planner expansion is visible to findNextExecutable");
+        if (log.isInfoEnabled()) {
+            log.info("Tree runOneNodeInTree entry | nodeId={} type={} displayName={}", node.getId(), node.getType(), node.getDisplayName());
+        }
+        FeatureRegistry registry = FeatureRegistry.getInstance();
+        ResolvedPrePost resolved = FeatureResolver.resolve(node, queueName, pipeline.getScope(), registry);
+        boolean isPlugin = node.getType() == NodeType.PLUGIN;
+        String pluginId = isPlugin && node.getPluginRef() != null ? node.getPluginRef() : null;
+        NodeExecutionContext context = new NodeExecutionContext(
+                node.getId(), node.getType().getTypeName(), node.getNodeType(), null, tenantId, tenantConfigMap,
+                queueName, pluginId, null);
+        boolean isActivity = NodeActivityPredicate.isActivityNode(node);
+        if (isActivity) {
+            featureRunner.runPre(resolved, context, registry);
+        }
+        Object nodeResult = null;
+        boolean executionSucceeded = false;
+        try {
+            nodeResult = dispatcher.dispatchWithTree(node, pipeline, variableEngine, queueName, runtimeTree,
+                    (fromNodeId) -> runSubtree(runtimeTree, fromNodeId, pipeline, variableEngine, queueName));
+            executionSucceeded = true;
+            if (isActivity) {
+                featureRunner.runPostSuccess(resolved, context.withExecutionSucceeded(true), nodeResult, registry);
+            }
+        } catch (Throwable t) {
+            runtimeTree.markFailed(node.getId());
             if (isActivity) {
                 featureRunner.runPostError(resolved, context.withExecutionSucceeded(false), null, registry);
             }

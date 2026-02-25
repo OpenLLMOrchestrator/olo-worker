@@ -1,4 +1,4 @@
-package com.olo.worker.config;
+package com.olo.bootstrap.validation;
 
 import com.olo.executiontree.config.PipelineConfiguration;
 import com.olo.executiontree.config.PipelineDefinition;
@@ -16,8 +16,6 @@ import java.util.Objects;
 /**
  * Validates config file version, plugin contract versions, and feature contract versions
  * so that config updates are rejected before breaking changes (fail-fast).
- *
- * @see <a href="../../../docs/versioned-config-strategy.md">Versioned config strategy</a>
  */
 public final class ConfigCompatibilityValidator {
 
@@ -26,12 +24,6 @@ public final class ConfigCompatibilityValidator {
     private final PluginRegistry pluginRegistry;
     private final FeatureRegistry featureRegistry;
 
-    /**
-     * @param supportedConfigVersionMin minimum supported config version (e.g. "2.0"); null = skip config version check
-     * @param supportedConfigVersionMax maximum supported config version (e.g. "2.x"); null = skip
-     * @param pluginRegistry             used to resolve runtime plugin contract versions; null = skip plugin check
-     * @param featureRegistry            used to resolve runtime feature contract versions; null = skip feature check
-     */
     public ConfigCompatibilityValidator(String supportedConfigVersionMin,
                                          String supportedConfigVersionMax,
                                          PluginRegistry pluginRegistry,
@@ -42,13 +34,6 @@ public final class ConfigCompatibilityValidator {
         this.featureRegistry = featureRegistry;
     }
 
-    /**
-     * Validates the pipeline configuration for the given tenant. Returns a result with errors if any check fails.
-     * Plugin resolution is tenant-scoped via {@link PluginRegistry#get(String, String)}.
-     *
-     * @param tenantId tenant id for plugin lookup (null treated as "default")
-     * @param config   pipeline configuration to validate
-     */
     public ValidationResult validate(String tenantId, PipelineConfiguration config) {
         List<String> errors = new ArrayList<>();
         String tenant = tenantId != null && !tenantId.isBlank() ? tenantId.trim() : "default";
@@ -58,7 +43,6 @@ public final class ConfigCompatibilityValidator {
             return ValidationResult.failure(errors);
         }
 
-        // Config file version
         String configVersion = config.getVersion();
         if (supportedConfigVersionMin != null || supportedConfigVersionMax != null) {
             if (configVersion == null || configVersion.isBlank()) {
@@ -85,14 +69,13 @@ public final class ConfigCompatibilityValidator {
             Scope scope = def.getScope();
             if (scope == null) continue;
 
-            // Plugin contract versions (tenant-scoped)
             if (pluginRegistry != null && scope.getPlugins() != null) {
                 for (PluginDef pluginDef : scope.getPlugins()) {
                     if (pluginDef == null) continue;
                     String pluginId = pluginDef.getId();
                     if (pluginId == null || pluginId.isBlank()) continue;
                     String expectedVersion = pluginDef.getContractVersion();
-                    if (expectedVersion == null || expectedVersion.isBlank()) continue; // config does not require a version
+                    if (expectedVersion == null || expectedVersion.isBlank()) continue;
                     String actualVersion = pluginRegistry.getContractVersion(tenant, pluginId);
                     if (actualVersion == null) {
                         if (pluginRegistry.get(tenant, pluginId) == null) {
@@ -106,7 +89,6 @@ public final class ConfigCompatibilityValidator {
                 }
             }
 
-            // Feature contract versions
             if (featureRegistry != null && scope.getFeatures() != null) {
                 for (FeatureDef featureDef : scope.getFeatures()) {
                     if (featureDef == null) continue;
@@ -131,9 +113,6 @@ public final class ConfigCompatibilityValidator {
         return errors.isEmpty() ? ValidationResult.success() : ValidationResult.failure(errors);
     }
 
-    /**
-     * Validates for the given tenant and throws ConfigIncompatibleException if invalid.
-     */
     public void validateOrThrow(String tenantId, PipelineConfiguration config) {
         ValidationResult result = validate(tenantId, config);
         if (!result.isValid()) {
@@ -141,12 +120,10 @@ public final class ConfigCompatibilityValidator {
         }
     }
 
-    /** Validates (using default tenant for plugin lookup) and throws if invalid. */
     public void validateOrThrow(PipelineConfiguration config) {
         validateOrThrow("default", config);
     }
 
-    /** Simple version compare: 1.0 vs 1.0 = 0, 2.0 vs 1.0 = 1, 1.0 vs 2.0 = -1. "x" suffix treated as high (e.g. 2.x >= 2.0). */
     private static int compareVersions(String a, String b) {
         if (a == null && b == null) return 0;
         if (a == null || a.isBlank()) return -1;

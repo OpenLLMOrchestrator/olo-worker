@@ -32,8 +32,8 @@ public final class NodeActivityPredicate {
     public static boolean isExecutableActivityType(NodeType type) {
         if (type == null) return false;
         return switch (type) {
-            case PLUGIN, JOIN, EVENT_WAIT, LLM_DECISION, TOOL_ROUTER, EVALUATION, REFLECTION, UNKNOWN -> true;
-            case SEQUENCE, GROUP, IF, SWITCH, CASE, ITERATOR, FORK, TRY_CATCH, RETRY, SUB_PIPELINE -> false;
+            case PLUGIN, JOIN, EVENT_WAIT, LLM_DECISION, TOOL_ROUTER, EVALUATION, REFLECTION, PLANNER, UNKNOWN -> true;
+            case SEQUENCE, GROUP, IF, SWITCH, CASE, ITERATOR, FORK, TRY_CATCH, RETRY, SUB_PIPELINE, FILL_TEMPLATE -> false;
         };
     }
 }
