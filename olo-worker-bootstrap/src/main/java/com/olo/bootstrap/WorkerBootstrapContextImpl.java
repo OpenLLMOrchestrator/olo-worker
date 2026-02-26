@@ -1,9 +1,13 @@
 package com.olo.bootstrap;
 
 import com.olo.annotations.ResourceCleanup;
+import com.olo.bootstrap.node.DefaultNodeFeatureEnricherFactory;
+import com.olo.bootstrap.node.PipelineDynamicNodeBuilder;
 import com.olo.config.OloConfig;
 import com.olo.executiontree.config.PipelineConfiguration;
 import com.olo.features.FeatureRegistry;
+import com.olo.node.DynamicNodeBuilder;
+import com.olo.node.NodeFeatureEnricherFactory;
 import com.olo.plugin.PluginExecutorFactory;
 import com.olo.plugin.PluginRegistry;
 import org.slf4j.Logger;
@@ -25,13 +29,19 @@ public final class WorkerBootstrapContextImpl implements WorkerBootstrapContext 
     private final Object runLedger;
     private final Object sessionCache;
     private final PluginExecutorFactory pluginExecutorFactory;
+    private final DynamicNodeBuilder dynamicNodeBuilder;
+    private final NodeFeatureEnricherFactory nodeFeatureEnricherFactory;
 
     public WorkerBootstrapContextImpl(BootstrapContextImpl delegate, Object runLedger, Object sessionCache,
-                                       PluginExecutorFactory pluginExecutorFactory) {
+                                       PluginExecutorFactory pluginExecutorFactory,
+                                       DynamicNodeBuilder dynamicNodeBuilder,
+                                       NodeFeatureEnricherFactory nodeFeatureEnricherFactory) {
         this.delegate = Objects.requireNonNull(delegate, "delegate");
         this.runLedger = runLedger;
         this.sessionCache = Objects.requireNonNull(sessionCache, "sessionCache");
         this.pluginExecutorFactory = Objects.requireNonNull(pluginExecutorFactory, "pluginExecutorFactory");
+        this.dynamicNodeBuilder = dynamicNodeBuilder != null ? dynamicNodeBuilder : PipelineDynamicNodeBuilder.getInstance();
+        this.nodeFeatureEnricherFactory = nodeFeatureEnricherFactory != null ? nodeFeatureEnricherFactory : DefaultNodeFeatureEnricherFactory.getInstance();
     }
 
     @Override
@@ -47,6 +57,16 @@ public final class WorkerBootstrapContextImpl implements WorkerBootstrapContext 
     @Override
     public PluginExecutorFactory getPluginExecutorFactory() {
         return pluginExecutorFactory;
+    }
+
+    @Override
+    public DynamicNodeBuilder getDynamicNodeBuilder() {
+        return dynamicNodeBuilder;
+    }
+
+    @Override
+    public NodeFeatureEnricherFactory getNodeFeatureEnricherFactory() {
+        return nodeFeatureEnricherFactory;
     }
 
     @Override

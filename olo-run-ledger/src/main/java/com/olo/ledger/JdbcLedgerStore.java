@@ -6,7 +6,6 @@ import org.slf4j.LoggerFactory;
 
 import java.io.BufferedReader;
 import java.io.InputStreamReader;
-import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
 import java.sql.Connection;
 import java.sql.DriverManager;
@@ -18,6 +17,8 @@ import java.util.TimeZone;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.stream.Collectors;
+
+import org.postgresql.util.PGobject;
 
 /**
  * JDBC implementation of LedgerStore. Persists to tables olo_run and olo_run_node.
@@ -109,15 +110,37 @@ public final class JdbcLedgerStore implements LedgerStore {
         }
     }
 
-    /** Parses a string to UUID; returns null for null or blank. Throws IllegalArgumentException for invalid UUID. */
-    private static UUID parseUuid(String s) {
+    /**
+     * Converts a string to a UUID for id columns. Id columns are always UUID; when the value is not a
+     * valid UUID (e.g. "default", "root"), returns a deterministic UUID so the row can be stored.
+     * The original string is stored in the corresponding name column (tenant_name, node_name, etc.).
+     */
+    private static UUID toUuid(String s) {
         if (s == null || s.isBlank()) return null;
+        String t = s.trim();
         try {
-            return UUID.fromString(s.trim());
-        } catch (IllegalArgumentException e) {
-            throw new IllegalArgumentException("Invalid UUID: " + s, e);
+            return UUID.fromString(t);
+        } catch (IllegalArgumentException ignored) {
+            return UUID.nameUUIDFromBytes(t.getBytes(StandardCharsets.UTF_8));
         }
     }
+
+    /** Truncate to max length for name columns; null/blank returns null. */
+    private static String toName(String s, int maxLen) {
+        if (s == null || s.isBlank()) return null;
+        String t = s.trim();
+        return t.length() > maxLen ? t.substring(0, maxLen) : t;
+    }
+
+    /** Wrap string as PG jsonb for a single ? placeholder (avoids ?::jsonb double-count in PG JDBC). */
+    private static PGobject toJsonbPgObject(String json) throws SQLException {
+        PGobject o = new PGobject();
+        o.setType("jsonb");
+        o.setValue(json != null ? json : "{}");
+        return o;
+    }
+
+    private static final int NAME_MAX_LEN = 255;
 
     @Override
     public void runStarted(String runId, String tenantId, String pipeline, String configVersion,
@@ -129,15 +152,17 @@ public final class JdbcLedgerStore implements LedgerStore {
     public void runStarted(String runId, String tenantId, String pipeline, String configVersion,
                            String snapshotVersionId, String pluginVersionsJson, String inputJson, long startTimeMillis,
                            String pipelineChecksum, String executionEngineVersion) {
-        String sql = "INSERT INTO " + TABLE_RUN + " (run_id, tenant_id, pipeline, input_json, start_time, status) VALUES (?,?,?,?::jsonb,?,?)";
+        String sql = "INSERT INTO " + TABLE_RUN + " (run_id, tenant_id, tenant_name, pipeline, input_json, start_time, status) VALUES (?,?,?,?,?::jsonb,?,?)";
         try (Connection c = connection(); PreparedStatement ps = c.prepareStatement(sql)) {
-            ps.setObject(1, parseUuid(runId));
-            ps.setObject(2, parseUuid(tenantId));
-            ps.setString(3, pipeline);
-            ps.setString(4, inputJson != null ? inputJson : "{}");
-            ps.setTimestamp(5, new Timestamp(startTimeMillis));
-            ps.setString(6, STATUS_RUNNING);
+            ps.setObject(1, toUuid(runId));
+            ps.setObject(2, toUuid(tenantId));
+            ps.setString(3, toName(tenantId, NAME_MAX_LEN));
+            ps.setString(4, pipeline);
+            ps.setString(5, inputJson != null ? inputJson : "{}");
+            ps.setTimestamp(6, new Timestamp(startTimeMillis));
+            ps.setString(7, STATUS_RUNNING);
             ps.executeUpdate();
+            log.info("Ledger entry created | olo_run | runId={} tenantId={} tenantName={} pipeline={}", runId, tenantId, toName(tenantId, NAME_MAX_LEN), pipeline);
         } catch (SQLException e) {
             log.error("Ledger persist failed: runStarted runId={} tenantId={} pipeline={} error={} SQLState={}", runId, tenantId, pipeline, e.getMessage(), e.getSQLState(), e);
             throw new RuntimeException("Ledger runStarted failed", e);
@@ -148,16 +173,18 @@ public final class JdbcLedgerStore implements LedgerStore {
     @Override
     public void configRecorded(String runId, String tenantId, String pipeline, String configVersion,
                               String snapshotVersionId, String pluginVersionsJson) {
-        String sql = "INSERT INTO " + TABLE_CONFIG + " (run_id, tenant_id, pipeline, config_version, snapshot_version_id, plugin_versions, created_at) VALUES (?,?,?,?,?,?,?)";
+        String sql = "INSERT INTO " + TABLE_CONFIG + " (run_id, tenant_id, tenant_name, pipeline, config_version, snapshot_version_id, plugin_versions, created_at) VALUES (?,?,?,?,?,?,?,?)";
         try (Connection c = connection(); PreparedStatement ps = c.prepareStatement(sql)) {
-            ps.setObject(1, parseUuid(runId));
-            ps.setObject(2, parseUuid(tenantId));
-            ps.setString(3, pipeline);
-            ps.setString(4, configVersion);
-            ps.setString(5, snapshotVersionId);
-            ps.setString(6, pluginVersionsJson);
-            ps.setTimestamp(7, new Timestamp(System.currentTimeMillis()));
+            ps.setObject(1, toUuid(runId));
+            ps.setObject(2, toUuid(tenantId));
+            ps.setString(3, toName(tenantId, NAME_MAX_LEN));
+            ps.setString(4, pipeline);
+            ps.setString(5, configVersion);
+            ps.setString(6, snapshotVersionId);
+            ps.setString(7, pluginVersionsJson);
+            ps.setTimestamp(8, new Timestamp(System.currentTimeMillis()));
             ps.executeUpdate();
+            log.info("Ledger entry created | olo_config | runId={} tenantId={} pipeline={}", runId, tenantId, pipeline);
         } catch (SQLException e) {
             log.error("Ledger persist failed: configRecorded runId={} tenantId={} pipeline={} error={} SQLState={}", runId, tenantId, pipeline, e.getMessage(), e.getSQLState(), e);
             throw new RuntimeException("Ledger configRecorded failed", e);
@@ -187,8 +214,9 @@ public final class JdbcLedgerStore implements LedgerStore {
             ps.setObject(6, totalPromptTokens);
             ps.setObject(7, totalCompletionTokens);
             ps.setString(8, currency);
-            ps.setObject(9, parseUuid(runId));
+            ps.setObject(9, toUuid(runId));
             ps.executeUpdate();
+            log.info("Ledger entry updated | olo_run | runId={} status={}", runId, status != null ? status : STATUS_FAILED);
         } catch (SQLException e) {
             log.error("Ledger persist failed: runEnded runId={} error={} SQLState={}", runId, e.getMessage(), e.getSQLState(), e);
             throw new RuntimeException("Ledger runEnded failed", e);
@@ -198,10 +226,10 @@ public final class JdbcLedgerStore implements LedgerStore {
                 "total_tokens=(SELECT COALESCE(SUM(COALESCE(token_input_count,0)+COALESCE(token_output_count,0)),0) FROM " + TABLE_NODE + " WHERE run_id=?) WHERE run_id=?";
         try (Connection c = connection(); PreparedStatement ps = c.prepareStatement(aggSql)) {
             ps.setObject(1, durationMs);
-            ps.setObject(2, parseUuid(runId));
-            ps.setObject(3, parseUuid(runId));
-            ps.setObject(4, parseUuid(runId));
-            ps.setObject(5, parseUuid(runId));
+            ps.setObject(2, toUuid(runId));
+            ps.setObject(3, toUuid(runId));
+            ps.setObject(4, toUuid(runId));
+            ps.setObject(5, toUuid(runId));
             ps.executeUpdate();
         } catch (SQLException e) {
             log.debug("Ledger run aggregates skipped (columns may be missing): {}", e.getMessage());
@@ -221,19 +249,25 @@ public final class JdbcLedgerStore implements LedgerStore {
     @Override
     public void nodeStarted(String runId, String tenantId, String nodeId, String nodeType, String inputSnapshotJson, long startTimeMillis,
                             String parentNodeId, Integer executionOrder, Integer depth) {
-        String sql = "INSERT INTO " + TABLE_NODE + " (run_id, tenant_id, node_id, node_type, input_snapshot, start_time, status, parent_node_id, execution_order, depth) VALUES (?,?,?,?,?::jsonb,?,?,?,?,?)";
+        // Use plain ? for jsonb and PGobject so the driver sees exactly 14 placeholders (avoid ?::jsonb double-count).
+        String sql = "INSERT INTO " + TABLE_NODE + " (run_id, tenant_id, tenant_name, node_id, node_name, node_type, input_snapshot, start_time, status, parent_node_id, parent_node_name, execution_order, depth, attempt) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)";
         try (Connection c = connection(); PreparedStatement ps = c.prepareStatement(sql)) {
-            ps.setObject(1, parseUuid(runId));
-            ps.setObject(2, tenantId != null && !tenantId.isBlank() ? parseUuid(tenantId) : null);
-            ps.setObject(3, parseUuid(nodeId));
-            ps.setString(4, nodeType);
-            ps.setString(5, inputSnapshotJson != null ? inputSnapshotJson : "{}");
-            ps.setTimestamp(6, new Timestamp(startTimeMillis));
-            ps.setString(7, STATUS_RUNNING);
-            ps.setObject(8, parentNodeId != null && !parentNodeId.isBlank() ? parseUuid(parentNodeId) : null);
-            ps.setObject(9, executionOrder);
-            ps.setObject(10, depth);
+            ps.setObject(1, toUuid(runId));
+            ps.setObject(2, tenantId != null && !tenantId.isBlank() ? toUuid(tenantId) : null);
+            ps.setString(3, toName(tenantId, NAME_MAX_LEN));
+            ps.setObject(4, toUuid(nodeId));
+            ps.setString(5, toName(nodeId, NAME_MAX_LEN));
+            ps.setString(6, nodeType);
+            ps.setObject(7, toJsonbPgObject(inputSnapshotJson != null ? inputSnapshotJson : "{}"));
+            ps.setTimestamp(8, new Timestamp(startTimeMillis));
+            ps.setString(9, STATUS_RUNNING);
+            ps.setObject(10, parentNodeId != null && !parentNodeId.isBlank() ? toUuid(parentNodeId) : null);
+            ps.setString(11, toName(parentNodeId, NAME_MAX_LEN));
+            ps.setObject(12, executionOrder);
+            ps.setObject(13, depth);
+            ps.setObject(14, 1); // first attempt at node start
             ps.executeUpdate();
+            log.info("Ledger entry created | olo_run_node | runId={} nodeId={} nodeName={} nodeType={}", runId, nodeId, toName(nodeId, NAME_MAX_LEN), nodeType);
         } catch (SQLException e) {
             log.error("Ledger persist failed: nodeStarted runId={} nodeId={} nodeType={} error={} SQLState={}", runId, nodeId, nodeType, e.getMessage(), e.getSQLState(), e);
             throw new RuntimeException("Ledger nodeStarted failed", e);
@@ -263,9 +297,10 @@ public final class JdbcLedgerStore implements LedgerStore {
             i = setAiMetrics(ps, i, aiMetrics);
             i = setReplayMeta(ps, i, replayMeta);
             i = setFailureMeta(ps, i, failureMeta);
-            ps.setObject(i++, parseUuid(runId));
-            ps.setObject(i++, parseUuid(nodeId));
+            ps.setObject(i++, toUuid(runId));
+            ps.setObject(i++, toUuid(nodeId));
             ps.executeUpdate();
+            log.info("Ledger entry updated | olo_run_node | runId={} nodeId={} status={}", runId, nodeId, STATUS_SUCCESS.equals(status) ? STATUS_SUCCESS : STATUS_FAILED);
         } catch (SQLException e) {
             log.error("Ledger persist failed: nodeEnded runId={} nodeId={} error={} SQLState={}", runId, nodeId, e.getMessage(), e.getSQLState(), e);
             throw new RuntimeException("Ledger nodeEnded failed", e);

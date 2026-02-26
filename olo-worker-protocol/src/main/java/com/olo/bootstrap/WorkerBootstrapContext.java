@@ -1,11 +1,13 @@
 package com.olo.bootstrap;
 
+import com.olo.node.DynamicNodeBuilder;
+import com.olo.node.NodeFeatureEnricherFactory;
 import com.olo.plugin.PluginExecutorFactory;
 
 /**
  * Extended bootstrap context returned from {@code OloBootstrap.initializeWorker()}.
- * Adds run ledger, session cache, and plugin executor factory so the worker can start
- * Temporal without bootstrap logic and without depending on concrete plugin registry.
+ * Adds run ledger, session cache, plugin executor factory, and dynamic-node builder/enricher
+ * so the worker and planner depend only on protocol contracts.
  * <p>
  * Types are {@link Object} where needed so that protocol does not depend on ledger or
  * configuration implementation.
@@ -23,6 +25,18 @@ public interface WorkerBootstrapContext extends BootstrapContext {
      * Implementation (e.g. from plugin module) uses PluginRegistry; worker uses only this contract.
      */
     PluginExecutorFactory getPluginExecutorFactory();
+
+    /**
+     * Builder for fully designed dynamic nodes (planner requests new nodes through this contract).
+     * Implementation in bootstrap; returns nodes with pipeline/queue features attached.
+     */
+    DynamicNodeBuilder getDynamicNodeBuilder();
+
+    /**
+     * Factory for {@link com.olo.node.NodeFeatureEnricher} (attach features to existing nodes).
+     * Used when enriching dynamic steps from JSON in the worker.
+     */
+    NodeFeatureEnricherFactory getNodeFeatureEnricherFactory();
 
     /**
      * Invokes resource cleanup (e.g. {@link com.olo.annotations.ResourceCleanup#onExit()}) on all

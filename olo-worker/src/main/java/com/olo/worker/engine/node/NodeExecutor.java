@@ -9,6 +9,8 @@ import com.olo.features.FeatureRegistry;
 import com.olo.features.NodeExecutionContext;
 import com.olo.features.ResolvedPrePost;
 import com.olo.ledger.LedgerContext;
+import com.olo.node.DynamicNodeBuilder;
+import com.olo.node.NodeFeatureEnricher;
 import com.olo.worker.engine.PluginInvoker;
 import com.olo.worker.engine.VariableEngine;
 import com.olo.worker.engine.runtime.RuntimeExecutionTree;
@@ -41,21 +43,24 @@ public final class NodeExecutor {
     public NodeExecutor(PluginInvoker pluginInvoker, PipelineConfiguration config,
                         ExecutionType executionType, ExecutorService executor,
                         String tenantId, Map<String, Object> tenantConfigMap,
-                        String ledgerRunId) {
+                        String ledgerRunId, DynamicNodeBuilder dynamicNodeBuilder,
+                        NodeFeatureEnricher nodeFeatureEnricher) {
         this.executionType = executionType != null ? executionType : ExecutionType.SYNC;
         this.executor = executor;
         this.tenantId = tenantId != null ? tenantId : "";
         this.tenantConfigMap = tenantConfigMap != null ? Map.copyOf(tenantConfigMap) : Map.of();
         this.ledgerRunId = ledgerRunId;
         this.featureRunner = new NodeFeatureRunner();
-        this.dispatcher = new NodeExecutionDispatcher(pluginInvoker, config, executionType, executor, ledgerRunId);
+        this.dispatcher = new NodeExecutionDispatcher(pluginInvoker, config, executionType, executor, ledgerRunId, dynamicNodeBuilder, nodeFeatureEnricher);
     }
 
     /** Constructor without ledger run id (e.g. SUB_PIPELINE or single-pipeline run). */
     public NodeExecutor(PluginInvoker pluginInvoker, PipelineConfiguration config,
                         ExecutionType executionType, ExecutorService executor,
-                        String tenantId, Map<String, Object> tenantConfigMap) {
-        this(pluginInvoker, config, executionType, executor, tenantId, tenantConfigMap, null);
+                        String tenantId, Map<String, Object> tenantConfigMap,
+                        DynamicNodeBuilder dynamicNodeBuilder,
+                        NodeFeatureEnricher nodeFeatureEnricher) {
+        this(pluginInvoker, config, executionType, executor, tenantId, tenantConfigMap, null, dynamicNodeBuilder, nodeFeatureEnricher);
     }
 
     /**
@@ -79,6 +84,8 @@ public final class NodeExecutor {
         if (ledgerRunId != null && !ledgerRunId.isBlank()) {
             LedgerContext.setRunId(ledgerRunId);
         }
+        ExpansionState expansionState = new ExpansionState();
+        ExpansionLimits expansionLimits = ExpansionLimits.DEFAULT;
         try {
             int iteration = 0;
             while (true) {
@@ -105,7 +112,7 @@ public final class NodeExecutor {
                 if (log.isInfoEnabled()) {
                     log.info("Tree loop step 5 | runOneNodeInTree | nodeId={} type={}", nextId, node.getType());
                 }
-                runOneNodeInTree(node, pipeline, variableEngine, queueName, runtimeTree);
+                runOneNodeInTree(node, pipeline, variableEngine, queueName, runtimeTree, expansionState, expansionLimits);
                 runtimeTree.markCompleted(nextId);
                 if (log.isInfoEnabled()) {
                     log.info("Tree loop step 6 | markCompleted | nodeId={} | iteration={}", nextId, iteration);
@@ -302,7 +309,8 @@ public final class NodeExecutor {
     }
 
     private void runSubtree(RuntimeExecutionTree tree, String fromNodeId, PipelineDefinition pipeline,
-                           VariableEngine variableEngine, String queueName) {
+                            VariableEngine variableEngine, String queueName,
+                            ExpansionState expansionState, ExpansionLimits expansionLimits) {
         if (tree == null || fromNodeId == null) return;
         while (true) {
             String nextId = tree.findNextExecutable();
@@ -313,14 +321,21 @@ public final class NodeExecutor {
                 tree.markCompleted(nextId);
                 continue;
             }
-            runOneNodeInTree(n, pipeline, variableEngine, queueName, tree);
+            runOneNodeInTree(n, pipeline, variableEngine, queueName, tree, expansionState, expansionLimits);
             tree.markCompleted(nextId);
         }
     }
 
     private void runOneNodeInTree(ExecutionTreeNode node, PipelineDefinition pipeline,
-                                 VariableEngine variableEngine, String queueName, RuntimeExecutionTree runtimeTree) {
+                                 VariableEngine variableEngine, String queueName, RuntimeExecutionTree runtimeTree,
+                                 ExpansionState expansionState, ExpansionLimits expansionLimits) {
         Objects.requireNonNull(runtimeTree, "runtimeTree must not be null so planner expansion is visible to findNextExecutable");
+        if (executionType == ExecutionType.ASYNC && node.getType() == NodeType.PLANNER) {
+            throw new IllegalStateException(
+                "PLANNER nodes are not supported with ASYNC execution. "
+                    + "Planner expansion (attachChildren, VariableEngine writes) would race with concurrent branches. "
+                    + "Use SYNC execution for pipelines that contain PLANNER nodes. nodeId=" + node.getId());
+        }
         if (log.isInfoEnabled()) {
             log.info("Tree runOneNodeInTree entry | nodeId={} type={} displayName={}", node.getId(), node.getType(), node.getDisplayName());
         }
@@ -339,7 +354,8 @@ public final class NodeExecutor {
         boolean executionSucceeded = false;
         try {
             nodeResult = dispatcher.dispatchWithTree(node, pipeline, variableEngine, queueName, runtimeTree,
-                    (fromNodeId) -> runSubtree(runtimeTree, fromNodeId, pipeline, variableEngine, queueName));
+                    (fromNodeId) -> runSubtree(runtimeTree, fromNodeId, pipeline, variableEngine, queueName, expansionState, expansionLimits),
+                    expansionState, expansionLimits);
             executionSucceeded = true;
             if (isActivity) {
                 featureRunner.runPostSuccess(resolved, context.withExecutionSucceeded(true), nodeResult, registry);

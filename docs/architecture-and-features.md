@@ -1,6 +1,6 @@
 # OLO Worker: Architecture and Features
 
-This document describes the architecture of the OLO Temporal worker and all features in their current implementation. It is updated to match the codebase: multi-tenant (tenant-scoped Redis and config), **tenant list and tenant-specific config** from Redis `olo:tenants` (or OLO_TENANT_IDS), **tenant-scoped PluginRegistry**, **TenantConfig** / **TenantConfigRegistry** for plugins and features, **unknown-tenant check** at workflow start, **immutable config snapshots** (ExecutionConfigSnapshot per run), **execution version pinning** (optional `routing.configVersion`), **QuotaFeature** (PRE phase, fail-fast from tenant config soft/hard limits), Redis INCR/DECR activeWorkflows for monitoring; feature phases (pre / postSuccess / postError / finally), VariableEngine sentinel for nulls, LocalContext and config keyed by tenant and queue, and version validation at bootstrap and on config change.
+This document describes the architecture of the OLO Temporal worker and all features in their current implementation. It is updated to match the codebase: multi-tenant (tenant-scoped Redis and config), **tenant list and tenant-specific config** from Redis `olo:tenants` (or OLO_TENANT_IDS), **tenant-scoped PluginRegistry**, **TenantConfig** / **TenantConfigRegistry** for plugins and features, **unknown-tenant check** at workflow start, **immutable config snapshots** (ExecutionConfigSnapshot per run), **execution version pinning** (optional `routing.configVersion`), **QuotaFeature** (PRE phase, fail-fast from tenant config soft/hard limits), Redis INCR/DECR activeWorkflows for monitoring; feature phases (pre / postSuccess / postError / finally), VariableEngine sentinel for nulls, LocalContext and config keyed by tenant and queue, and version validation at bootstrap and on config change. **olo-worker-protocol** holds contracts (BootstrapContext, WorkerBootstrapContext, BootstrapContributor, PluginExecutor, PluginExecutorFactory) so plugins/tools/features depend on the contract only; the worker calls **OloBootstrap.initializeWorker()** and uses **WorkerBootstrapContext** (runResourceCleanup on shutdown). Linear execution trees schedule one Temporal activity per leaf via **ExecuteNodeDynamicActivity**.
 
 ---
 
@@ -19,6 +19,7 @@ This document describes the architecture of the OLO Temporal worker and all feat
 │      config (plugins, features, 3rd party deps, restrictions)                  │
 │    • For each tenant, load pipeline config per queue → GlobalConfigurationContext │
 │      (tenant-scoped Redis keys: <tenantId>:olo:kernel:config:...); return BootstrapContext │
+│    • initializeWorker(): register plugins/tools, run BootstrapContributors, build WorkerBootstrapContext (runLedger, sessionCache, PluginExecutorFactory, runResourceCleanup) │
 ├─────────────────────────────────────────────────────────────────────────────────┤
 │  Global state                                                                     │
 │    • GlobalConfigurationContext: Map<tenantKey, Map<queueName, GlobalContext>>    │
@@ -31,13 +32,12 @@ This document describes the architecture of the OLO Temporal worker and all feat
 │  Temporal Worker                                                                  │
 │    • One Worker per task queue (OLO_QUEUE + optional -debug queues)               │
 │    • Workflows: OloKernelWorkflowImpl                                             │
-│    • Activities: OloKernelActivitiesImpl (processInput, executePlugin,           │
-│                  getChatResponse, runExecutionTree; optional RunLedger for olo_run/olo_run_node) │
+│    • Activities: OloKernelActivitiesImpl, ExecuteNodeDynamicActivity (processInput, executePlugin, getChatResponse, getExecutionPlan, executeNode, applyResultMapping, runExecutionTree; optional RunLedger) │
 ├─────────────────────────────────────────────────────────────────────────────────┤
 │  Execution flow (per workflow run)                                                │
 │    1. processInput(workflowInputJson) → cache WorkflowInput at tenant-scoped     │
 │       session key <tenantId>:olo:kernel:sessions:<transactionId>:USERINPUT       │
-│    2. runExecutionTree(queueName, workflowInputJson)                             │
+│    2. getExecutionPlan; if linear → one activity per leaf (executeNode); else runExecutionTree(queueName, workflowInputJson) │
 │       • tenantId = normalize(workflowInput.context.tenantId)                    │
 │       • If tenantId not in allowed list → throw IllegalArgumentException         │
 │       • INCR <tenantId>:olo:quota:activeWorkflows; try { … } finally { DECR } (DECR always runs)  │
@@ -89,6 +89,7 @@ For security and audit, the stack is split into clear trust boundaries:
 
 | Module | Purpose |
 |--------|---------|
+| **olo-worker-protocol** | Contracts only (no impl): **BootstrapContext** (getConfig, getTaskQueues, getTenantIds, getPipelineConfigByQueue, getTemporalTargetOrDefault, getTemporalNamespaceOrDefault, **putContributorData** / **getContributorData**); **WorkerBootstrapContext** extends BootstrapContext (getRunLedger, getSessionCache, **getPluginExecutorFactory**, **runResourceCleanup**); **BootstrapContributor** (`contribute(BootstrapContext)`); **PluginExecutor** (execute(pluginId, inputsJson, nodeId), toJson/fromJson); **PluginExecutorFactory** (create(tenantId, nodeInstanceCache)). Lets plugins, tools, and features depend on the contract without pulling in bootstrap or plugin implementation. |
 | **olo-annotations** | Declarative metadata: `@OloFeature` (name, phase, applicableNodeTypes, contractVersion), `@OloPlugin`, `@OloUiComponent`; DTOs (FeatureInfo, PluginInfo, UiComponentInfo with contractVersion); **ResourceCleanup** (`onExit()` for plugins/features at worker shutdown); annotation processor generating `META-INF/olo-features.json`, `olo-plugins.json`, `olo-ui-components.json` for bootstrap/UI. |
 | **olo-worker-configuration** | `OloConfig` from environment: task queues, **OLO_TENANT_IDS**, **OLO_DEFAULT_TENANT_ID**, cache, DB, session prefix, pipeline config dir/version/retry/key prefix; **normalizeTenantId(String)**; **getSessionDataPrefix(tenantId)**, **getPipelineConfigKeyPrefix(tenantId)**; **TenantConfig** / **TenantConfigRegistry** (incl. **quota.softLimit** / **quota.hardLimit** per tenant); **TenantEntry**; `OloSessionCache` (incr/decr/getActiveWorkflowsCount for `<tenantId>:olo:quota:activeWorkflows`); Redis pipeline config source/sink. |
 | **olo-worker-input** | `WorkflowInput`, `InputItem`, **`Routing`** (pipeline, transactionType, transactionId, **configVersion** optional for execution version pinning), `Context`, `Metadata`; storage modes (LOCAL, CACHE, FILE); **InputStorageKeys.cacheKey(tenantId, transactionId, inputName)** for CACHE storage (`olo:<tenantId>:worker:...`). |
@@ -100,11 +101,11 @@ For security and audit, the stack is split into clear trust boundaries:
 | **olo-feature-quota** | **QuotaFeature**: `@OloFeature(name = "quota", phase = PRE, applicableNodeTypes = {"SEQUENCE"})`. **Must only run on the root node and only once per run**—enable via pipeline scope.features only; do not attach per node (e.g. node-level preExecution/features). Runs once at pipeline root (first SEQUENCE), before any plugin execution; reads **OloSessionCache.getActiveWorkflowsCount(tenantId)**; compares with **tenantConfig.quota.softLimit** / **quota.hardLimit**; if usage &gt; limit throws **QuotaExceededException** (fail-fast, no blocking). **QuotaContext** holds session cache (set at worker startup). Optional 5% burst over softLimit. |
 | **olo-feature-metrics** | **MetricsFeature**: `@OloFeature(name = "metrics", phase = PRE_FINALLY, applicableNodeTypes = {"*"})`. Lazy self-bootstrapping: static **AtomicReference&lt;MeterRegistry&gt;**; on first execution creates **SimpleMeterRegistry** via CAS and reuses forever (thread-safe, lock-free). In **afterFinally()** increments **olo.node.executions** counter with tags **tenant**, **nodeType**. Implements **ResourceCleanup**. Kernel untouched. |
 | **olo-run-ledger** | **Run ledger** (env-gated by **OLO_RUN_LEDGER**). **Write-only, fail-safe, append-only.** Each node **attempt** is recorded separately; uniqueness **(run_id, node_id, attempt)**. **LedgerStore**, **NoOpLedgerStore**, **JdbcLedgerStore** (PostgreSQL: **olo_run**, **olo_run_node**, **olo_config**; **UUID** for run_id, tenant_id, node_id, parent_node_id; **TIMESTAMPTZ** for timestamps); **RunLedger**; **LedgerContext** (runId set in NodeExecutor from ExecutionConfigSnapshot, including ASYNC path); **NodeAiMetrics**, **NodeReplayMeta**, **NodeFailureMeta**. **RunLevelLedgerFeature** (root: run start/end, config snapshot in olo_config); **NodeLedgerFeature** (every node: scope includes ledger-node when registered). Run end: error_message, failure_stage, total_prompt_tokens, total_completion_tokens, currency; node end: error_code, error_message, error_details (JSONB), prompt_cost, completion_cost, total_cost, temperature, top_p, provider_request_id, attempt, max_attempts, backoff_ms, parent_node_id, execution_order, depth. See docs/run-ledger-schema.md. |
-| **olo-worker-plugin** | `ContractType`, **ModelExecutorPlugin** (`execute(inputs)` default, **execute(inputs, TenantConfig)** for tenant-specific params); **ReducerPlugin** (REDUCER for JOIN merge); **PluginRegistry** tenant-scoped: **Map&lt;tenantId, Map&lt;pluginId, PluginEntry&gt;&gt;**; **get(tenantId, pluginId)**, **getModelExecutor(tenantId, pluginId)**, **getReducer(tenantId, pluginId)**; getContractVersion(tenantId, pluginId); getAllByTenant() for shutdown. |
+| **olo-worker-plugin** | `ContractType`, **ModelExecutorPlugin** (`execute(inputs)` default, **execute(inputs, TenantConfig)** for tenant-specific params); **ReducerPlugin** (REDUCER for JOIN merge); **PluginRegistry** tenant-scoped: **Map&lt;tenantId, Map&lt;pluginId, PluginEntry&gt;&gt;**; **get(tenantId, pluginId)**, **getModelExecutor(tenantId, pluginId)**, **getReducer(tenantId, pluginId)**; getContractVersion(tenantId, pluginId); getAllByTenant() for shutdown. **PluginExecutorFactory** implementation (wires PluginRegistry; bootstrap puts it in **WorkerBootstrapContext**); **PluginManager**, **PluginProvider** for discovery and registration. Worker uses protocol **PluginExecutor** / **PluginExecutorFactory** only. |
 | **olo-join-reducer** | **OutputReducerPlugin** (ReducerPlugin): clubs labeled inputs into `combinedOutput` string (one line per label). **OutputReducerPluginProvider** (OUTPUT_REDUCER, REDUCER). Used by **JOIN** nodes with **mergeStrategy: REDUCE** and pluginRef OUTPUT_REDUCER; registered via olo-internal-plugins. |
 | **olo-plugin-ollama** | `OllamaModelExecutorPlugin` (MODEL_EXECUTOR): **execute(inputs, TenantConfig)** uses tenantConfig.get("ollamaBaseUrl"), get("ollamaModel") when set; `/api/chat`; `@OloPlugin`; registered per tenant as e.g. `GPT4_EXECUTOR` (env or tenant config overrides). |
-| **olo-worker-bootstrap** | `OloBootstrap.initialize()`: build `OloConfig`; **resolve tenant list** from Redis **olo:tenants** (parse id/name/config via TenantEntry.parseTenantEntriesWithConfig); populate **TenantConfigRegistry** from config; if olo:tenants missing, use OLO_TENANT_IDS and write list to Redis; for each tenant load pipeline config into **GlobalConfigurationContext**; return **BootstrapContext** (config, **getTenantIds()**, flattened map keyed by `"tenant:queue"`). |
-| **olo-worker** | `OloWorkerApplication`: bootstrap; **register plugins per tenant**; create sessionCache and runLedger (if enabled); **InternalFeatures.registerInternalFeatures(registry, sessionCache, runLedger)**; **OloKernelActivitiesImpl(sessionCache, allowedTenantIds, runLedger)**; unknown-tenant check; **INCR** activeWorkflows; **try {** LocalContext, snapshot (with runId when ledger enabled), **ExecutionEngine.run(snapshot, ...)** **} finally { DECR activeWorkflows }** (DECR must always run); NodeExecutor (sets LedgerContext from snapshot runId, including ASYNC; **community pre features** catch-and-log); PluginInvoker, ResultMapper; workflow **OloKernelWorkflow** / **OloKernelWorkflowImpl** in package `com.olo.worker.workflow`; shutdown invokes ResourceCleanup on all plugins/features. |
+| **olo-worker-bootstrap** | **OloBootstrap.initialize()**: build `OloConfig`; resolve tenant list from Redis **olo:tenants** (or OLO_TENANT_IDS); for each tenant load pipeline config into **GlobalConfigurationContext**; return **BootstrapContext** (config, getTaskQueues, getTenantIds, getPipelineConfigByQueue, putContributorData/getContributorData). **OloBootstrap.initializeWorker()**: call initialize(); create **PluginManager**, register internal plugins/tools; **run BootstrapContributor**s (e.g. planner) with context; create sessionCache and runLedger (if enabled); register features; validate pipeline configs; return **WorkerBootstrapContext** (adds getRunLedger, getSessionCache, **getPluginExecutorFactory**, **runResourceCleanup**). Implementations: **BootstrapContextImpl**, **WorkerBootstrapContextImpl**. |
+| **olo-worker** | `OloWorkerApplication`: calls **OloBootstrap.initializeWorker()** (no bootstrap logic in worker); uses **WorkerBootstrapContext** (config, queues, tenants, runLedger, sessionCache, **pluginExecutorFactory**, **runResourceCleanup**). **OloKernelActivitiesImpl**(sessionCache, allowedTenantIds, runLedger, **pluginExecutorFactory**); **ExecuteNodeDynamicActivity** (handles per-node activity when tree is linear; activity type "NODETYPE" or "PLUGIN:pluginRef"). Workflow: **getExecutionPlan**; if linear → one activity per leaf via executeNode; else **runExecutionTree**. INCR activeWorkflows; try { LocalContext, snapshot, **ExecutionEngine.run(snapshot, pluginExecutor, ...)** } finally { DECR }; NodeExecutor, PluginInvoker (uses protocol **PluginExecutor**), ResultMapper. Shutdown: **ctx.runResourceCleanup()**. |
 
 ---
 
@@ -308,8 +309,8 @@ The executor enforces this in **NodeExecutor.runPre**: for **COMMUNITY** feature
 - **PipelineConfiguration**  
   Root: `version`, `executionDefaults`, `pluginRestrictions`, `featureRestrictions`, `pipelines` (map of name → PipelineDefinition).
 
-- **ExecutionType**  
-  Enum: **SYNC** (default), **ASYNC**. When ASYNC, all nodes except JOIN run in a thread-pool task; JOIN runs synchronously to merge branches. Set per pipeline via `executionType` in pipeline definition.
+- **ExecutionType**
+  Enum: **SYNC** (default), **ASYNC**. When ASYNC, all nodes except JOIN run in a thread-pool task; JOIN runs synchronously to merge branches. Set per pipeline via `executionType` in pipeline definition. **PLANNER nodes are not allowed with ASYNC** (executor throws **IllegalStateException**); use SYNC for pipelines that contain PLANNER.
 
 - **PipelineDefinition**  
   Per-pipeline: `name`, `workflowId`, `inputContract`, `variableRegistry`, `scope`, `executionTree`, `outputContract`, `resultMapping`, `executionType` (optional, default SYNC).
@@ -344,10 +345,13 @@ The executor enforces this in **NodeExecutor.runPre**: for **COMMUNITY** feature
   1. Build `OloConfig` from environment (includes **getTenantIds()**, **OLO_DEFAULT_TENANT_ID**).  
   2. Validate task queues (exit if empty).  
   3. **Resolve tenant list**: read Redis **olo:tenants**; if valid, use **TenantEntry.parseTenantEntriesWithConfig** and populate **TenantConfigRegistry**; else use OLO_TENANT_IDS and write list to Redis. **For each tenant** in the resolved list: compute tenant-scoped prefix `config.getPipelineConfigKeyPrefix(tenantId)`; call **GlobalConfigurationContext.loadAllQueuesAndPopulateContext(tenantId, taskQueues, version, configSourceSink, configSourceSink, configDir, retry, tenantScopedPrefix)** so config is loaded per queue with Redis keys `<tenantId>:olo:kernel:config:<queue>:<version>`; file-loaded config is written back to Redis/DB.  
-  4. Build a flattened map `"tenant:queue"` → `PipelineConfiguration` and return **BootstrapContext** (config, **getTenantIds()**, that map).
+  4. Build a flattened map `"tenant:queue"` → `PipelineConfiguration` and return **BootstrapContext** (interface in **olo-worker-protocol**): **getConfig()**, **getTaskQueues()**, **getTenantIds()**, **getPipelineConfigByQueue()**, **getTemporalTargetOrDefault**, **getTemporalNamespaceOrDefault**, **putContributorData(key, value)** / **getContributorData(key)** / **getContributorData()** for contributor metadata.
 
-- **BootstrapContext** (bootstrap return type)  
-  Wrapper returned from **OloBootstrap.initialize()**. Holds `OloConfig`, **getTenantIds()**, and the map of composite key → `PipelineConfiguration`; provides **getConfig()**, **getPipelineConfigByQueue()**, **getTemporalTargetOrDefault**, **getTemporalNamespaceOrDefault**. Distinct from **GlobalConfigurationContext** (runtime config store) and **GlobalContext** (olo-worker-execution-tree: one queue’s config entry).
+- **OloBootstrap.initializeWorker()**  
+  Full worker bootstrap: calls **initialize()**; creates **PluginManager**, registers internal plugins and tools; runs **BootstrapContributor**s (e.g. **PlannerBootstrapContributor**) with the context so they can read pipeline config and attach data via **putContributorData**; creates sessionCache and runLedger (if enabled); registers features; validates all pipeline configs; returns **WorkerBootstrapContext** (interface in olo-worker-protocol). **WorkerBootstrapContext** extends BootstrapContext and adds **getRunLedger()**, **getSessionCache()**, **getPluginExecutorFactory()**, **runResourceCleanup()**. Implementations: **BootstrapContextImpl**, **WorkerBootstrapContextImpl** in olo-worker-bootstrap.
+
+- **BootstrapContext** (contract)  
+  Read-write view of bootstrap: config, task queues, tenants, pipeline config by queue, and contributor data. Defined in **olo-worker-protocol** so plugins, tools, and features can depend on the contract only; it also provides getPipelineConfigByQueue(), getTemporalTargetOrDefault, getTemporalNamespaceOrDefault, and putContributorData/getContributorData. Distinct from **GlobalConfigurationContext** (runtime config store) and **GlobalContext** (olo-worker-execution-tree: one queue config entry).
 
 ---
 
@@ -356,14 +360,20 @@ The executor enforces this in **NodeExecutor.runPre**: for **COMMUNITY** feature
 - **OloKernelWorkflowImpl**  
   Implements `OloKernelWorkflow.run(WorkflowInput)`:  
   1. **processInput(workflowInput.toJson())** — deserialize; **tenantId = OloConfig.normalizeTenantId(context.tenantId)**; cache input at **tenant-scoped session key** `config.getSessionDataPrefix(tenantId) + transactionId + ":USERINPUT"` (i.e. `<tenantId>:olo:kernel:sessions:<transactionId>:USERINPUT`) via `OloSessionCache`.  
-  2. **runExecutionTree(queueName, workflowInput.toJson())** — queueName from `workflowInput.getRouting().getPipeline()`. Activity: **tenantId** from workflow input; unknown-tenant check; **INCR** activeWorkflows; **try {** requestedVersion, LocalContext, snapshot, **ExecutionEngine.run(snapshot, ...)** (QuotaFeature PRE runs inside; throws **QuotaExceededException** if over limit) **} finally { DECR activeWorkflows }** (DECR always runs); return workflow result string.  
+  2. **getExecutionPlan(queueName, workflowInputJson)** — activity returns a plan JSON (linear true/false, and when linear: configJson, pipelineName, queueName, nodes array with activityType and nodeId). When the tree is **linear** (only SEQUENCE, GROUP, and leaf nodes), the workflow schedules **one Temporal activity per leaf/activity node** via **ExecuteNodeDynamicActivity** (activity type "NODETYPE" or "PLUGIN:pluginRef"); for each node it calls **executeNode(activityType, planJson, nodeId, variableMapJson, queueName, workflowInputJson, dynamicStepsJson)** then **applyResultMapping(planJson, variableMapJson)**. When the tree is **non-linear** (e.g. IF, SWITCH, FORK/JOIN), the workflow calls **runExecutionTree(queueName, workflowInputJson)** once.  
   3. Return the result string (e.g. chat answer).
 
 - **OloKernelActivities**  
   - **processInput(String workflowInputJson)** — deserialize, **tenantId from context**, store at tenant-scoped session key via `OloSessionCache`.  
-  - **executePlugin(String pluginId, String inputsJson)** — uses default tenant; delegates to **executePlugin(tenantId, pluginId, inputsJson)** with **TenantConfigRegistry.get(tenantId)** passed to **plugin.execute(inputs, tenantConfig)**.  
+  - **executePlugin(String pluginId, String inputsJson)** — uses tenant from context; **PluginExecutor** (from **PluginExecutorFactory** in WorkerBootstrapContext) resolves plugin and invokes with **TenantConfig**.  
   - **getChatResponse(String pluginId, String prompt)** — build `{"prompt": prompt}`, call `executePlugin`, return `responseText`.  
-  - **runExecutionTree(String queueName, String workflowInputJson)** — get **tenantId** from workflow input (normalized); **unknown-tenant check**; **INCR** activeWorkflows; **try {** requestedVersion, LocalContext, **ExecutionConfigSnapshot.of(...)**; **ExecutionEngine.run(snapshot, ...)** (QuotaFeature PRE checks tenant config quota; throws **QuotaExceededException** if usage &gt; soft/hard limit) **} finally { DECR activeWorkflows }** (critical: DECR must always run, including on exception or plugin failure, so quota does not drift); return result string.
+  - **getExecutionPlan(String queueName, String workflowInputJson)** — returns plan JSON (linear flag, configJson, pipelineName, queueName, nodes). Used by workflow to decide per-node scheduling vs single runExecutionTree.  
+  - **executeNode(...)** — executes one node (leaf or feature-type); activity type is "NODETYPE" or "PLUGIN:pluginRef"; supports **dynamicStepsJson** for planner-generated steps. Handled by **ExecuteNodeDynamicActivity** (DynamicActivity).  
+  - **applyResultMapping(String planJson, String variableMapJson)** — applies pipeline resultMapping to variable map; returns workflow result string.  
+  - **runExecutionTree(String queueName, String workflowInputJson)** — get **tenantId** from workflow input (normalized); **unknown-tenant check**; **INCR** activeWorkflows; **try {** requestedVersion, LocalContext, **ExecutionConfigSnapshot.of(...)**; **ExecutionEngine.run(snapshot, pluginExecutor, ...)** (QuotaFeature PRE checks tenant config quota; throws **QuotaExceededException** if usage &gt; soft/hard limit) **} finally { DECR activeWorkflows }** (critical: DECR must always run); return result string. Activities implementation **OloKernelActivitiesImpl** takes **PluginExecutorFactory** from **WorkerBootstrapContext** and creates a **PluginExecutor** per run (tenant + node instance cache).
+
+- **ExecuteNodeDynamicActivity**  
+  Implements Temporal **DynamicActivity**. Handles per-node activity invocations when the workflow schedules one activity per leaf; activity type in event history is "NODETYPE" or "PLUGIN:pluginRef". Delegates to **OloKernelActivitiesImpl.executeNode(...)**.
 
 ---
 
@@ -391,6 +401,120 @@ The execution engine is split into five components, each with a single responsib
 
 - **Runtime execution tree (tree state machine)**  
   **RuntimeExecutionTree** is the single source of truth for a run: one in-memory tree, same object for the whole loop. **Mental model:** workflow/activity = tree state machine; **dispatcher** = state transition engine (dispatch one node, no special cases); **PLANNER** = state mutation producer (only attaches children via **attachChildren**, does not run children inline). Execution loop: **`while ((nextId = tree.findNextExecutable()) != null) { dispatch(node); tree.markCompleted(nextId); }`**. Planner expansion happens **inside** planner node execution; the dispatcher does not branch on planner — it just dispatches. **Do not** execute planner children inline (e.g. `for (child : planner.children) dispatch(child)`); always return to the loop so **findNextExecutable** picks new nodes. For Temporal: if execution were ever split across multiple activities, the tree would need to live in workflow state and be passed to/from activities; currently the full loop runs inside one activity so the tree stays in memory.
+
+---
+
+### 3.8.1 Dynamic tree node creation (PLANNER expansion)
+
+When a **PLANNER** node runs, it produces a **proposed expansion** (semantic child descriptions). The **worker** is the only component that **materializes** nodes and mutates the tree. This keeps the planner **pure and side-effect free** and gives the worker full control over IDs, structure, and lifecycle (clean DDD separation).
+
+#### Roles
+
+| Role | Responsibility |
+|------|----------------|
+| **Planner** | Proposes expansion: parses planner output (e.g. JSON from an LLM) and returns **`List<NodeSpec>`** plus **variables to inject**. Does **not** construct nodes, assign IDs, or touch the tree. |
+| **Worker** | Accepts the proposal and materializes it: validates the request, creates **ExecutionTreeNode** instances (assigns IDs), attaches pipeline/queue features, calls **`RuntimeExecutionTree.attachChildren(parentId, nodes)`**, and returns a read-only **ExpansionResult** (e.g. for logging or downstream use). |
+
+#### Protocol types (olo-worker-protocol)
+
+- **NodeSpec** — Semantic description of a child: `displayName`, `pluginRef`, `inputMappings`, `outputMappings`. No `id`; the planner does not assign IDs.
+- **DynamicNodeExpansionRequest** — Request to expand a PLANNER node: `plannerNodeId` (parent that will receive children), `List<NodeSpec> children`.
+- **ExpandedNode** — Read-only view of a node after expansion: `id`, `displayName`, `pluginRef`. Exposed to callers who need to know what was created; planner never sees **ExecutionTreeNode** or tree internals.
+- **ExpansionResult** — Result of expansion: `List<ExpandedNode> expandedNodes`, `List<NodeSpec> childSpecs`.
+- **DynamicNodeFactory** — Interface: **`ExpansionResult expand(DynamicNodeExpansionRequest request)`**. Implemented only in the **worker**; planner and protocol do not implement it.
+
+#### Planner side (olo-planner, olo-planner-a)
+
+- **SubtreeBuilder.buildExpansion(plannerOutputText, plannerNodeId)**  
+  Parses the planner output (e.g. JSON array of steps) and returns:
+  - **ExpansionBuildResult** = **DynamicNodeExpansionRequest** (with `plannerNodeId` and `List<NodeSpec>`) + **Map&lt;String, Object&gt; variablesToInject** (e.g. `__planner_step_0_prompt`, `__planner_step_1_response`).
+- The planner **does not**:
+  - Construct **ExecutionTreeNode**.
+  - Call **attachChildren** or touch **RuntimeExecutionTree**.
+  - Assign node IDs or know tree internals.
+- Example: **JsonStepsSubtreeBuilder** parses a JSON array of `{ "toolId", "input": { "prompt" } }`, builds one **NodeSpec** per step (displayName, pluginRef, input/output mappings), and returns **ExpansionBuildResult(request, variablesToInject)**. No execution-tree dependency in the expansion path beyond **ParameterMapping** (protocol/execution-tree contract).
+
+#### Worker side (olo-worker)
+
+- **DynamicNodeFactoryImpl** (in **olo-worker** runtime layer, **not** in olo-worker-execution-tree) implements **DynamicNodeFactory**:
+  - Constructor: **RuntimeExecutionTree**, **PipelineFeatureContext**, **NodeFeatureEnricher**, **ExpansionLimits**, **ExpansionState** (limits and state supplied per run by **NodeExecutor**).
+  - **expand(request)**:
+    1. Validate: `plannerNodeId` non-blank, `children` non-null; skip if no valid child specs.
+    2. **Idempotency:** if **tree.hasPlannerExpanded(plannerNodeId)** then return **ExpansionResult** built from existing children (no attach).
+    3. **Limits:** enforce **ExpansionLimits** (maxDynamicNodesPerPlanner, maxTotalNodesPerRun, **maxExpansionDepth**, maxPlannerInvocationsPerRun); throw **ExpansionLimitExceededException** if exceeded.
+    4. For each **NodeSpec**: create an **ExecutionTreeNode** (worker assigns UUID, type PLUGIN, pluginRef, inputMappings, outputMappings).
+    5. Enrich each node with **NodeFeatureEnricher** (same feature attachment as static nodes).
+    6. **tree.attachChildren(plannerNodeId, nodes)** — **only** place that mutates the tree for planner expansion.
+    7. **tree.markPlannerExpanded(plannerNodeId)**; **expansionState.incrementPlannerInvocations()**.
+    8. Return **ExpansionResult(expandedNodes, childSpecs)**.
+- **NodeExecutionDispatcher.executePlannerTree**:
+  - **Parser path**: resolve **SubtreeBuilder** by name (e.g. `"default"` → JsonStepsSubtreeBuilder). Call **builder.buildExpansion(planResultJson, node.getId())** → **ExpansionBuildResult**. Apply **variablesToInject** to **VariableEngine**. Create **DynamicNodeFactoryImpl(tree, featureContext, nodeFeatureEnricher, expansionLimits, expansionState)** and call **factory.expand(expansionResult.expansionRequest())**. Do **not** call **attachChildren** in the dispatcher; the factory does it.
+  - **Subtree-creator path**: plugin returns a list of steps (e.g. `steps`, `variablesToInject`). Build **List&lt;NodeSpec&gt;** from steps (**nodeSpecsFromCreatorSteps**), build **DynamicNodeExpansionRequest(node.getId(), specs)**, create the same factory (with limits and state), call **factory.expand(request)**. Again, no **attachChildren** in the dispatcher.
+
+#### Flow summary
+
+```
+  PLANNER node runs (model or interpret-only)
+       │
+       ▼
+  Planner output (e.g. JSON) → SubtreeBuilder.buildExpansion(planText, plannerNodeId)
+       │
+       ▼
+  ExpansionBuildResult { DynamicNodeExpansionRequest(plannerNodeId, List<NodeSpec>), variablesToInject }
+       │
+       ▼
+  Worker: apply variablesToInject to VariableEngine
+       │
+       ▼
+  Worker: DynamicNodeFactoryImpl(tree, featureContext, enricher).expand(request)
+       │
+       ├── validate request
+       ├── if tree.hasPlannerExpanded(plannerNodeId) → return ExpansionResult from existing children (idempotency)
+       ├── enforce ExpansionLimits
+       ├── for each NodeSpec → create ExecutionTreeNode (worker assigns ID), enrich with features
+       ├── tree.attachChildren(plannerNodeId, nodes); tree.markPlannerExpanded(plannerNodeId)
+       └── return ExpansionResult(expandedNodes, childSpecs)
+       │
+       ▼
+  Execution loop continues; findNextExecutable() sees new children and runs them in order.
+```
+
+#### Planner expansion idempotency (activity retry)
+
+Temporal retries an activity on failure. If the planner node ran and attached children before the crash, a retry would run the same activity again and, without a guard, could **expand the same planner node twice** and attach duplicate children (and duplicate VariableEngine writes). To avoid that, the tree keeps an **already-expanded** marker per planner node:
+
+- **RuntimeExecutionTree** maintains **expandedPlannerNodeIds** (set of planner node ids). After **attachChildren** for a planner parent, the factory calls **markPlannerExpanded(plannerNodeId)**.
+- **DynamicNodeFactoryImpl.expand()** checks **tree.hasPlannerExpanded(plannerNodeId)** first. If true (e.g. tree reused on retry), it **does not attach again**; it builds and returns an **ExpansionResult** from the **existing children** of that node (ids, displayName, pluginRef from the tree) so the execution loop can continue. No duplicate nodes, no duplicate attachment.
+- This guard is effective when the **same** tree instance is used across retries (e.g. if the tree is ever passed in workflow state or reused by the activity). If each retry builds a fresh tree from the static definition, there are no duplicates but the guard is a no-op for that run.
+
+#### PLANNER and ASYNC execution
+
+**PLANNER nodes are not supported when `executionType == ASYNC`.** The executor throws **IllegalStateException** before dispatching a PLANNER node if the pipeline is ASYNC. Reason: planner expansion (attachChildren, VariableEngine writes) would race with concurrent branches (thread-pool execution, JOIN runs sync). Execution order and variable visibility would be undefined. Pipelines that use PLANNER must use **SYNC** execution.
+
+#### What the planner must NOT do
+
+- Mutate the tree or call **attachChildren**.
+- Construct **ExecutionTreeNode** or depend on **RuntimeExecutionTree**.
+- Assign node IDs (worker owns ID policy).
+- Access bootstrap context directly for expansion; expansion is driven by **SubtreeBuilder** output and worker-owned **DynamicNodeFactory**.
+
+#### What the worker owns
+
+- Tree mutation (**attachChildren** only inside **DynamicNodeFactoryImpl.expand**).
+- Structural validation of the expansion request.
+- ID policy (e.g. UUID per new node).
+- Lifecycle transitions (new nodes become runnable via **findNextExecutable** after attachment).
+- **Expansion limits (hard caps)** so dynamic injection is safe — enforced inside **DynamicNodeFactoryImpl.expand()**:
+  - **maxDynamicNodesPerPlanner** — max children from a single expansion (default 100).
+  - **maxTotalNodesPerRun** — max total nodes in the tree for the run, static + dynamic (default 500).
+  - **maxExpansionDepth** — max depth at which expansion is allowed; root depth 0 (default 5).
+  - **maxPlannerInvocationsPerRun** — max number of planner expansion invocations per run (default 10).
+  Limits are defined by **ExpansionLimits** (default **ExpansionLimits.DEFAULT**); when exceeded, **ExpansionLimitExceededException** is thrown before any tree mutation. **ExpansionState** tracks planner invocation count per run and is passed with limits from **NodeExecutor** into the dispatcher and factory.
+- **Planner cycle prevention (depth only):** **maxExpansionDepth** is the only guard against unbounded expansion. Expansion is allowed only when the planner node’s depth is **less than** the limit (root depth 0; default limit 5). If the planner injected a step that itself triggered expansion at greater depth, expansion would be rejected once depth ≥ limit. There are **no** restrictions on which **pluginRef** values may appear in expanded steps; cycle prevention is purely by depth.
+
+#### Feature attachment for dynamically created nodes
+
+New nodes created by **DynamicNodeFactoryImpl** receive the same pipeline and queue-based features as static nodes: **NodeFeatureEnricher** (from bootstrap/worker context) is applied to each new **ExecutionTreeNode** before **attachChildren**. So pipeline scope features and queue-based features (e.g. `-debug` → debug feature) apply to planner-generated steps without any planner-specific enricher in the worker.
 
 ---
 

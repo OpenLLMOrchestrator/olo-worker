@@ -22,7 +22,7 @@ public final class RunLedger {
         try {
             store.runStarted(runId, tenantId, pipeline, configVersion, snapshotVersionId, pluginVersionsJson, inputJson, startTimeMillis);
         } catch (Throwable t) {
-            log.warn("Ledger runStarted failed (runId={}); execution continues: {}", runId, t.getMessage());
+            log.warn("Ledger runStarted failed (runId={}); execution continues. Fix DB schema or connection. Error: {}", runId, t.getMessage(), t);
         }
     }
 
@@ -32,7 +32,7 @@ public final class RunLedger {
         try {
             store.runStarted(runId, tenantId, pipeline, configVersion, snapshotVersionId, pluginVersionsJson, inputJson, startTimeMillis, pipelineChecksum, executionEngineVersion);
         } catch (Throwable t) {
-            log.warn("Ledger runStarted failed (runId={}); execution continues: {}", runId, t.getMessage());
+            log.warn("Ledger runStarted failed (runId={}); execution continues. Fix DB schema or connection. Error: {}", runId, t.getMessage(), t);
         }
     }
 
@@ -40,7 +40,7 @@ public final class RunLedger {
         try {
             store.runEnded(runId, endTimeMillis, finalOutput, status);
         } catch (Throwable t) {
-            log.warn("Ledger runEnded failed (runId={}); execution continues: {}", runId, t.getMessage());
+            log.warn("Ledger runEnded failed (runId={}); execution continues. Error: {}", runId, t.getMessage(), t);
         }
     }
 
@@ -48,7 +48,7 @@ public final class RunLedger {
         try {
             store.runEnded(runId, endTimeMillis, finalOutput, status, durationMs, null, null, null, null, null);
         } catch (Throwable t) {
-            log.warn("Ledger runEnded failed (runId={}); execution continues: {}", runId, t.getMessage());
+            log.warn("Ledger runEnded failed (runId={}); execution continues. Error: {}", runId, t.getMessage(), t);
         }
     }
 
@@ -57,7 +57,7 @@ public final class RunLedger {
         try {
             store.runEnded(runId, endTimeMillis, finalOutput, status, durationMs, errorMessage, failureStage, totalPromptTokens, totalCompletionTokens, currency);
         } catch (Throwable t) {
-            log.warn("Ledger runEnded failed (runId={}); execution continues: {}", runId, t.getMessage());
+            log.warn("Ledger runEnded failed (runId={}); execution continues. Error: {}", runId, t.getMessage(), t);
         }
     }
 
@@ -65,7 +65,7 @@ public final class RunLedger {
         try {
             store.nodeStarted(runId, null, nodeId, nodeType, inputSnapshotJson, startTimeMillis);
         } catch (Throwable t) {
-            log.warn("Ledger nodeStarted failed (runId={}, nodeId={}); execution continues: {}", runId, nodeId, t.getMessage());
+            log.warn("Ledger nodeStarted failed (runId={}, nodeId={}); execution continues. Error: {}", runId, nodeId, t.getMessage(), t);
         }
     }
 
@@ -73,7 +73,7 @@ public final class RunLedger {
         try {
             store.nodeStarted(runId, tenantId, nodeId, nodeType, inputSnapshotJson, startTimeMillis);
         } catch (Throwable t) {
-            log.warn("Ledger nodeStarted failed (runId={}, nodeId={}); execution continues: {}", runId, nodeId, t.getMessage());
+            log.warn("Ledger nodeStarted failed (runId={}, nodeId={}); execution continues. Error: {}", runId, nodeId, t.getMessage(), t);
         }
     }
 
@@ -82,7 +82,7 @@ public final class RunLedger {
         try {
             store.nodeStarted(runId, tenantId, nodeId, nodeType, inputSnapshotJson, startTimeMillis, parentNodeId, executionOrder, depth);
         } catch (Throwable t) {
-            log.warn("Ledger nodeStarted failed (runId={}, nodeId={}); execution continues: {}", runId, nodeId, t.getMessage());
+            log.warn("Ledger nodeStarted failed (runId={}, nodeId={}); execution continues. Error: {}", runId, nodeId, t.getMessage(), t);
         }
     }
 
@@ -90,7 +90,7 @@ public final class RunLedger {
         try {
             store.nodeEnded(runId, nodeId, outputSnapshotJson, endTimeMillis, status, errorMessage);
         } catch (Throwable t) {
-            log.warn("Ledger nodeEnded failed (runId={}, nodeId={}); execution continues: {}", runId, nodeId, t.getMessage());
+            log.warn("Ledger nodeEnded failed (runId={}, nodeId={}); execution continues. Error: {}", runId, nodeId, t.getMessage(), t);
         }
     }
 
@@ -99,7 +99,7 @@ public final class RunLedger {
         try {
             store.nodeEnded(runId, nodeId, outputSnapshotJson, endTimeMillis, status, errorMessage, aiMetrics, replayMeta, failureMeta);
         } catch (Throwable t) {
-            log.warn("Ledger nodeEnded failed (runId={}, nodeId={}); execution continues: {}", runId, nodeId, t.getMessage());
+            log.warn("Ledger nodeEnded failed (runId={}, nodeId={}); execution continues. Error: {}", runId, nodeId, t.getMessage(), t);
         }
     }
 
@@ -108,7 +108,7 @@ public final class RunLedger {
         try {
             store.configRecorded(runId, tenantId, pipeline, configVersion, snapshotVersionId, pluginVersionsJson);
         } catch (Throwable t) {
-            log.warn("Ledger configRecorded failed (runId={}); execution continues: {}", runId, t.getMessage());
+            log.warn("Ledger configRecorded failed (runId={}); execution continues. Error: {}", runId, t.getMessage(), t);
         }
     }
 }

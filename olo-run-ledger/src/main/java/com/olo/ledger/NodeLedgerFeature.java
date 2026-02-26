@@ -51,6 +51,7 @@ public final class NodeLedgerFeature implements PreNodeCall, FinallyCall, Resour
     public void before(NodeExecutionContext context) {
         String runId = LedgerContext.getRunId();
         if (runId == null || runId.isBlank()) {
+            log.warn("Ledger node skip | nodeId={} | type={} | LedgerContext.runId is null (run/node records will not be persisted for this node; ensure OLO_RUN_LEDGER=true and ledger JDBC store is enabled)", context.getNodeId(), context.getType());
             return;
         }
         long now = System.currentTimeMillis();
@@ -68,6 +69,7 @@ public final class NodeLedgerFeature implements PreNodeCall, FinallyCall, Resour
     public void afterFinally(NodeExecutionContext context, Object nodeResult) {
         String runId = LedgerContext.getRunId();
         if (runId == null || runId.isBlank()) {
+            log.warn("Ledger nodeEnded skip | nodeId={} | LedgerContext.runId is null", context.getNodeId());
             return;
         }
         long now = System.currentTimeMillis();

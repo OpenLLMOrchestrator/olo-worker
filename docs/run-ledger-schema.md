@@ -8,13 +8,17 @@ When `OLO_RUN_LEDGER=true`, the worker persists run and node records to the data
 
 The canonical schema is in **`olo-run-ledger/src/main/resources/schema/olo-ledger.sql`**. Summary:
 
-- **olo_run** — One row per execution run. **run_id** (UUID PK), **tenant_id** (UUID NOT NULL), pipeline, input_json (JSONB), **start_time** / **end_time** (TIMESTAMPTZ), status, total_nodes, total_cost, total_tokens, duration_ms, error_message, failure_stage, total_prompt_tokens, total_completion_tokens, currency. Config snapshot fields (config_version, snapshot_version_id, plugin_versions) are **not** on olo_run; they live in **olo_config** only.
-- **olo_run_node** — One row per node **attempt**. **run_id** (UUID), **tenant_id** (UUID, nullable for backward compat when not provided), **node_id** (UUID), node_type, input_snapshot/output_snapshot (JSONB), start_time/end_time (TIMESTAMPTZ), status, error_code, error_message, error_details (JSONB), token/cost columns, model_name, provider, replay columns (prompt_hash, model_config_json, tool_calls_json, temperature, top_p, provider_request_id), retry columns (retry_count, attempt, max_attempts, backoff_ms), execution_stage, failure_type, **parent_node_id** (UUID), execution_order, depth. **Ledger is append-only:** each attempt is a separate row. Uniqueness: **(run_id, node_id, attempt)** when attempt is part of the key; current schema PK (run_id, node_id) allows one row per node per run until migration adds attempt to the key. FK run_id → olo_run ON DELETE CASCADE.
-- **olo_config** — Immutable config snapshot per run. **run_id** (UUID PK, FK → olo_run), **tenant_id** (UUID NOT NULL), pipeline, config_version, snapshot_version_id, plugin_versions, created_at (TIMESTAMPTZ). Written once at run start by `JdbcLedgerStore.configRecorded()` (called from `runStarted()`).
+- **olo_run** — One row per execution run. **run_id** (UUID PK), **tenant_id** (UUID NOT NULL), **tenant_name** (VARCHAR(255), semantic name e.g. "default"), pipeline, input_json (JSONB), **start_time** / **end_time** (TIMESTAMPTZ), status, total_nodes, total_cost, total_tokens, duration_ms, error_message, failure_stage, total_prompt_tokens, total_completion_tokens, currency. Config snapshot fields live in **olo_config** only.
+- **olo_run_node** — One row per node **attempt**. **run_id** (UUID), **tenant_id** (UUID, nullable), **tenant_name** (VARCHAR(255)), **node_id** (UUID), **node_name** (VARCHAR(255), semantic name e.g. "root", "plannerNode"), node_type, input_snapshot/output_snapshot (JSONB), start_time/end_time (TIMESTAMPTZ), status, error_code, error_message, error_details (JSONB), token/cost columns, model_name, provider, replay columns, retry columns, **parent_node_id** (UUID), **parent_node_name** (VARCHAR(255)), execution_order, depth. FK run_id → olo_run ON DELETE CASCADE.
+- **olo_config** — Immutable config snapshot per run. **run_id** (UUID PK, FK → olo_run), **tenant_id** (UUID NOT NULL), **tenant_name** (VARCHAR(255)), pipeline, config_version, snapshot_version_id, plugin_versions, created_at (TIMESTAMPTZ). Written once at run start by `JdbcLedgerStore.configRecorded()` (called from `runStarted()`).
+
+**Id vs name:** All **id** columns (run_id, tenant_id, node_id, parent_node_id) are **always UUID**. **Name** columns (tenant_name, node_name, parent_node_name) store the semantic/display identifier (e.g. "default", "root", "plannerNode") when the app passes a non-UUID; use name for display and querying by human-readable id.
 
 **Indexes:** idx_olo_run_tenant_start, idx_olo_run_tenant_pipeline_start, idx_olo_run_status, idx_olo_run_pipeline; idx_olo_run_node_run, idx_olo_run_node_tenant, idx_olo_run_node_status, idx_olo_run_node_type, idx_olo_run_node_parent; idx_olo_config_tenant_pipeline.
 
-**Java:** `JdbcLedgerStore` binds UUID columns via `setObject(..., parseUuid(...))`; null/blank tenant or parent_node_id are bound as null where the schema allows.
+**Java:** `JdbcLedgerStore` stores **id** columns as UUID only: `toUuid(s)` parses a valid UUID or produces a deterministic UUID from a semantic string. The same raw string is stored in the corresponding **name** column via `toName(s, 255)` so both id (UUID) and name (display) are persisted.
+
+**Troubleshooting — tables empty:** Ensure `OLO_RUN_LEDGER=true` (default in dev), and that DB is reachable: `OLO_DB_HOST`, `OLO_DB_PORT`, `OLO_DB_NAME`, `OLO_DB_USER`, `OLO_DB_PASSWORD`. Schema is created at bootstrap from `schema/olo-ledger.sql`. If JDBC init fails, the worker falls back to a no-op store and no rows are written. If you see **"Ledger runStarted failed"** or **"Ledger nodeStarted failed"** in logs with an error like **"column tenant_name does not exist"**, the tables were created before the name columns were added — run the **ALTER** statements in the "Migrations from previous schema" section above (e.g. `ALTER TABLE olo_run ADD COLUMN IF NOT EXISTS tenant_name VARCHAR(255);` etc.).
 
 ## Migrations from previous schema
 
@@ -25,6 +29,7 @@ If you already have `olo_run` / `olo_run_node` with VARCHAR or missing columns/t
 CREATE TABLE IF NOT EXISTS olo_config (
     run_id                  UUID PRIMARY KEY,
     tenant_id               UUID NOT NULL,
+    tenant_name             VARCHAR(255),
     pipeline                VARCHAR(255) NOT NULL,
     config_version          VARCHAR(64),
     snapshot_version_id     VARCHAR(64),
@@ -35,6 +40,7 @@ CREATE TABLE IF NOT EXISTS olo_config (
 CREATE INDEX IF NOT EXISTS idx_olo_config_tenant_pipeline ON olo_config(tenant_id, pipeline);
 
 -- Add new columns to olo_run (if not present)
+ALTER TABLE olo_run ADD COLUMN IF NOT EXISTS tenant_name VARCHAR(255);
 ALTER TABLE olo_run ADD COLUMN IF NOT EXISTS error_message TEXT;
 ALTER TABLE olo_run ADD COLUMN IF NOT EXISTS failure_stage VARCHAR(128);
 ALTER TABLE olo_run ADD COLUMN IF NOT EXISTS total_prompt_tokens INT;
@@ -42,6 +48,9 @@ ALTER TABLE olo_run ADD COLUMN IF NOT EXISTS total_completion_tokens INT;
 ALTER TABLE olo_run ADD COLUMN IF NOT EXISTS currency VARCHAR(8) DEFAULT 'USD';
 
 -- Add new columns to olo_run_node (if not present)
+ALTER TABLE olo_run_node ADD COLUMN IF NOT EXISTS tenant_name VARCHAR(255);
+ALTER TABLE olo_run_node ADD COLUMN IF NOT EXISTS node_name VARCHAR(255);
+ALTER TABLE olo_run_node ADD COLUMN IF NOT EXISTS parent_node_name VARCHAR(255);
 ALTER TABLE olo_run_node ADD COLUMN IF NOT EXISTS error_code VARCHAR(64);
 ALTER TABLE olo_run_node ADD COLUMN IF NOT EXISTS error_details JSONB;
 ALTER TABLE olo_run_node ADD COLUMN IF NOT EXISTS prompt_cost DECIMAL(10,6);
@@ -121,7 +130,8 @@ For high volume, partition by time to avoid table bloat and vacuum pressure:
 - **Config snapshot**: Stored only in olo_config (run_id, tenant_id, pipeline, config_version, snapshot_version_id, plugin_versions); no duplication on olo_run.
 - **Replay**: prompt_hash, model_config_json, tool_calls_json, external_payload_ref, temperature, top_p, provider_request_id support deterministic replay.
 - **Failure intelligence**: error_code, error_message, error_details, retry_count, attempt, max_attempts, backoff_ms, execution_stage, failure_type for reliability analytics.
-- **Hierarchy**: parent_node_id, execution_order, depth for tree reconstruction.
+- **Hierarchy**: parent_node_id, parent_node_name, execution_order, depth for tree reconstruction.
+- **Id vs name**: id columns (run_id, tenant_id, node_id, parent_node_id) are always UUID; name columns (tenant_name, node_name, parent_node_name) store the semantic/display value for querying and UI.
 
 ## Ledger is append-only; each attempt recorded separately
 

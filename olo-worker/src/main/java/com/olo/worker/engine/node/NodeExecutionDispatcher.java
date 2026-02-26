@@ -7,6 +7,14 @@ import com.olo.executiontree.tree.ExecutionTreeNode;
 import com.olo.executiontree.tree.NodeType;
 import com.olo.executiontree.tree.ParameterMapping;
 import com.olo.ledger.LedgerContext;
+import com.olo.node.DynamicNodeBuilder;
+import com.olo.node.DynamicNodeExpansionRequest;
+import com.olo.node.DynamicNodeFactory;
+import com.olo.node.ExpandedNode;
+import com.olo.node.ExpansionResult;
+import com.olo.node.NodeFeatureEnricher;
+import com.olo.node.NodeSpec;
+import com.olo.node.PipelineFeatureContextImpl;
 import com.olo.planner.PlannerContract;
 import com.olo.planner.PromptTemplateProvider;
 import com.olo.planner.SubtreeBuilder;
@@ -40,15 +48,20 @@ public final class NodeExecutionDispatcher {
     private final ExecutionType executionType;
     private final ExecutorService executor;
     private final String ledgerRunId;
+    private final DynamicNodeBuilder dynamicNodeBuilder;
+    private final NodeFeatureEnricher nodeFeatureEnricher;
 
     public NodeExecutionDispatcher(PluginInvoker pluginInvoker, PipelineConfiguration config,
                                    ExecutionType executionType, ExecutorService executor,
-                                   String ledgerRunId) {
+                                   String ledgerRunId, DynamicNodeBuilder dynamicNodeBuilder,
+                                   NodeFeatureEnricher nodeFeatureEnricher) {
         this.pluginInvoker = pluginInvoker;
         this.config = config;
         this.executionType = executionType != null ? executionType : ExecutionType.SYNC;
         this.executor = executor;
         this.ledgerRunId = ledgerRunId;
+        this.dynamicNodeBuilder = dynamicNodeBuilder;
+        this.nodeFeatureEnricher = nodeFeatureEnricher != null ? nodeFeatureEnricher : (n, c) -> n;
     }
 
     /**
@@ -96,7 +109,7 @@ public final class NodeExecutionDispatcher {
      */
     public Object dispatchWithTree(ExecutionTreeNode node, PipelineDefinition pipeline,
                                   VariableEngine variableEngine, String queueName, RuntimeExecutionTree tree,
-                                  Consumer<String> subtreeRunner) {
+                                  Consumer<String> subtreeRunner, ExpansionState expansionState, ExpansionLimits expansionLimits) {
         if (tree == null) {
             throw new IllegalStateException(
                 "Runtime tree is required for tree-driven execution. nodeId=" + node.getId() + " type=" + node.getType()
@@ -108,8 +121,13 @@ public final class NodeExecutionDispatcher {
             case SEQUENCE, GROUP, CASE -> null;
             case IF -> executeIfTree(node, pipeline, variableEngine, tree);
             case SWITCH -> executeSwitchTree(node, pipeline, variableEngine, tree);
-            case PLANNER -> executePlannerTree(node, pipeline, variableEngine, queueName, tree);
-            case PLUGIN -> pluginInvoker.invoke(node, variableEngine);
+            case PLANNER -> executePlannerTree(node, pipeline, variableEngine, queueName, tree, expansionState, expansionLimits);
+            case PLUGIN -> {
+                if (log.isInfoEnabled()) {
+                    log.info("Invoking PLUGIN | nodeId={} | pluginRef={} | displayName={}", node.getId(), node.getPluginRef(), node.getDisplayName());
+                }
+                yield pluginInvoker.invoke(node, variableEngine);
+            }
             case FILL_TEMPLATE -> executeFillTemplate(node, variableEngine, queueName);
             case EVENT_WAIT -> executeEventWait(node, variableEngine);
             case LLM_DECISION -> executeLlmDecision(node, variableEngine);
@@ -186,12 +204,19 @@ public final class NodeExecutionDispatcher {
 
     /** Planner node: run activity, parse plan, attach children to tree, return. Do not run children here. */
     private Object executePlannerTree(ExecutionTreeNode node, PipelineDefinition pipeline,
-                                     VariableEngine variableEngine, String queueName, RuntimeExecutionTree tree) {
+                                     VariableEngine variableEngine, String queueName, RuntimeExecutionTree tree,
+                                     ExpansionState expansionState, ExpansionLimits expansionLimits) {
+        String modelPluginRef = NodeParams.paramString(node, "modelPluginRef");
+        boolean interpretOnly = (modelPluginRef == null || modelPluginRef.isBlank());
+        String parserName = NodeParams.paramString(node, "parser");
+        if (parserName == null || parserName.isBlank()) parserName = NodeParams.paramString(node, "treeBuilder");
+        if (parserName == null || parserName.isBlank()) parserName = "default";
+        String subtreeCreatorPluginRef = NodeParams.paramString(node, "subtreeCreatorPluginRef");
+        log.info("Executing PLANNER | nodeId={} | mode={} | modelPluginRef={} | parser={} | subtreeCreator={}",
+                node.getId(), interpretOnly ? "interpretOnly" : "model", modelPluginRef, parserName, subtreeCreatorPluginRef != null && !subtreeCreatorPluginRef.isBlank() ? subtreeCreatorPluginRef : "-");
         log.info("PLANNER step 1 | nodeId={} | entry | tree present", node.getId());
         String planInputVariable = NodeParams.paramString(node, "planInputVariable");
         if (planInputVariable == null || planInputVariable.isBlank()) planInputVariable = "__planner_result";
-        String modelPluginRef = NodeParams.paramString(node, "modelPluginRef");
-        boolean interpretOnly = (modelPluginRef == null || modelPluginRef.isBlank());
         log.info("PLANNER step 2 | nodeId={} | mode={} | modelPluginRef={} | planInputVariable={}", node.getId(), interpretOnly ? "interpretOnly" : "model", modelPluginRef, planInputVariable);
 
         String planResultJson;
@@ -237,7 +262,6 @@ public final class NodeExecutionDispatcher {
                 : (planResultJson != null ? planResultJson : "");
         log.info("PLANNER step 4 | nodeId={} | plan input | length={} | snippet={}", node.getId(), planInputLen, planInputSnippet);
 
-        String subtreeCreatorPluginRef = NodeParams.paramString(node, "subtreeCreatorPluginRef");
         if (subtreeCreatorPluginRef != null && !subtreeCreatorPluginRef.isBlank()) {
             log.info("PLANNER step 5a | nodeId={} | using subtreeCreatorPluginRef={}", node.getId(), subtreeCreatorPluginRef);
             Map<String, Object> creatorInput = Map.of("planText", planResultJson != null ? planResultJson : "");
@@ -258,41 +282,42 @@ public final class NodeExecutionDispatcher {
                         variableEngine.put("__planner_step_" + i + "_prompt", step.get("prompt"));
                     }
                 }
-                List<ExecutionTreeNode> builtNodes = buildNodesFromCreatorSteps(steps);
-                log.info("PLANNER step 6a | nodeId={} | builtNodes from creator | count={} | stepRefs={}", node.getId(), builtNodes.size(),
-                        builtNodes.stream().map(ExecutionTreeNode::getPluginRef).filter(Objects::nonNull).toList());
-                tree.attachChildren(node.getId(), builtNodes);
-                log.info("PLANNER step 7a | nodeId={} | attachChildren done | stepsCount={} | stepRefs={}", node.getId(), builtNodes.size(),
-                        builtNodes.stream().map(ExecutionTreeNode::getPluginRef).filter(Objects::nonNull).toList());
+                PipelineFeatureContextImpl featureContext = new PipelineFeatureContextImpl(pipeline.getScope(), queueName);
+                List<NodeSpec> specs = nodeSpecsFromCreatorSteps(steps);
+                DynamicNodeFactory factory = new DynamicNodeFactoryImpl(tree, featureContext, nodeFeatureEnricher, expansionLimits, expansionState);
+                factory.expand(new DynamicNodeExpansionRequest(node.getId(), specs));
+                log.info("PLANNER step 6a | nodeId={} | expand from creator | count={} | stepRefs={}", node.getId(), specs.size(),
+                        specs.stream().map(NodeSpec::pluginRef).filter(Objects::nonNull).toList());
             }
             log.info("PLANNER step 8a | nodeId={} | exit (subtreeCreator path)", node.getId());
             return null;
         }
 
         log.info("PLANNER step 5b | nodeId={} | using parser (no subtreeCreator)", node.getId());
-        String parserName = NodeParams.paramString(node, "parser");
-        if (parserName == null || parserName.isBlank()) parserName = NodeParams.paramString(node, "treeBuilder");
-        if (parserName == null || parserName.isBlank()) parserName = "default";
         SubtreeBuilder builder = SubtreeBuilderRegistry.get(parserName);
         if (builder == null) {
             log.warn("PLANNER node {}: no parser for '{}'", node.getId(), parserName);
             return null;
         }
-        log.info("PLANNER step 6b | nodeId={} | parser={} | calling builder.build", node.getId(), parserName);
-        SubtreeBuilder.BuildResult buildResult = builder.build(planResultJson);
-        log.info("PLANNER step 6c | nodeId={} | parser build done | nodesCount={}", node.getId(), buildResult.nodes().size());
-        for (Map.Entry<String, Object> e : buildResult.variablesToInject().entrySet()) {
+        PipelineFeatureContextImpl featureContext = new PipelineFeatureContextImpl(pipeline.getScope(), queueName);
+        DynamicNodeFactory factory = new DynamicNodeFactoryImpl(tree, featureContext, nodeFeatureEnricher, expansionLimits, expansionState);
+        log.info("PLANNER step 6b | nodeId={} | parser={} | calling builder.buildExpansion", node.getId(), parserName);
+        SubtreeBuilder.ExpansionBuildResult expansionResult = builder.buildExpansion(planResultJson, node.getId());
+        List<NodeSpec> requestedSpecs = expansionResult.expansionRequest().children();
+        if (requestedSpecs == null || requestedSpecs.isEmpty()) {
+            log.warn("Planner could not add tree: parser returned no steps. nodeId={} | planLength={} | Check model output is a JSON array of objects with \"toolId\" and \"input\". Example: [{\"toolId\":\"ECHO_TOOL\",\"input\":{\"prompt\":\"...\"}}]",
+                    node.getId(), planResultJson != null ? planResultJson.length() : 0);
+        }
+        for (Map.Entry<String, Object> e : expansionResult.variablesToInject().entrySet()) {
             variableEngine.put(e.getKey(), e.getValue());
         }
-        List<ExecutionTreeNode> builtNodes = buildResult.nodes();
-        if (!builtNodes.isEmpty()) {
-            log.info("PLANNER step 7b | nodeId={} | attachChildren | parentId={} | count={} | stepRefs={}", node.getId(), node.getId(), builtNodes.size(),
-                    builtNodes.stream().map(ExecutionTreeNode::getPluginRef).filter(Objects::nonNull).toList());
-            tree.attachChildren(node.getId(), builtNodes);
-            log.info("PLANNER step 8b | nodeId={} | attachChildren done | parser={} | stepsCount={} | stepRefs={}", node.getId(), parserName, builtNodes.size(),
-                    builtNodes.stream().map(ExecutionTreeNode::getPluginRef).filter(Objects::nonNull).toList());
+        ExpansionResult expanded = factory.expand(expansionResult.expansionRequest());
+        if (!expanded.expandedNodes().isEmpty()) {
+            log.info("PLANNER step 7b | nodeId={} | expand done | parser={} | stepsCount={} | stepRefs={}", node.getId(), parserName, expanded.expandedNodes().size(),
+                    expanded.expandedNodes().stream().map(ExpandedNode::pluginRef).filter(Objects::nonNull).toList());
         } else {
-            log.info("PLANNER step 8b | nodeId={} | no nodes to attach | parser={}", node.getId(), parserName);
+            log.warn("PLANNER could not add tree: no nodes attached. nodeId={} | parser={} | requestedSpecsCount={} (possible causes: planner already expanded, expansion limits hit, or parser returned no valid steps)",
+                    node.getId(), parserName, requestedSpecs != null ? requestedSpecs.size() : 0);
         }
         log.info("PLANNER step 9 | nodeId={} | exit", node.getId());
         return null;
@@ -358,7 +383,7 @@ public final class NodeExecutionDispatcher {
                         variableEngine.put("__planner_step_" + i + "_prompt", step.get("prompt"));
                     }
                 }
-                return buildNodesFromCreatorSteps(steps);
+                return buildNodesFromCreatorSteps(steps, new PipelineFeatureContextImpl(pipeline.getScope(), queueName));
             }
             return List.of();
         }
@@ -371,11 +396,19 @@ public final class NodeExecutionDispatcher {
             log.warn("PLANNER node {}: no parser for '{}'", node.getId(), parserName);
             return List.of();
         }
-        SubtreeBuilder.BuildResult buildResult = builder.build(planResultJson);
+        PipelineFeatureContextImpl featureContext = new PipelineFeatureContextImpl(pipeline.getScope(), queueName);
+        SubtreeBuilder.BuildResult buildResult = dynamicNodeBuilder != null
+                ? builder.build(planResultJson, dynamicNodeBuilder, featureContext)
+                : builder.build(planResultJson);
         for (Map.Entry<String, Object> e : buildResult.variablesToInject().entrySet()) {
             variableEngine.put(e.getKey(), e.getValue());
         }
-        return buildResult.nodes();
+        if (dynamicNodeBuilder != null) {
+            return buildResult.nodes();
+        }
+        return buildResult.nodes().stream()
+                .map(n -> nodeFeatureEnricher.enrich(n, featureContext))
+                .toList();
     }
 
     private Object executeSequence(ExecutionTreeNode node, PipelineDefinition pipeline,
@@ -713,11 +746,33 @@ public final class NodeExecutionDispatcher {
     }
 
     /**
-     * Builds execution tree nodes from SUBTREE_CREATOR plugin output. Each step is a map with "pluginRef" and "prompt".
+     * Builds semantic child specs from SUBTREE_CREATOR plugin output. Used for expansion path
+     * (worker creates nodes via DynamicNodeFactory.expand).
      */
-    private static List<ExecutionTreeNode> buildNodesFromCreatorSteps(List<Map<String, Object>> steps) {
-        List<ExecutionTreeNode> nodes = new ArrayList<>();
+    private List<NodeSpec> nodeSpecsFromCreatorSteps(List<Map<String, Object>> steps) {
+        List<NodeSpec> specs = new ArrayList<>();
+        for (int i = 0; i < steps.size(); i++) {
+            Map<String, Object> step = steps.get(i);
+            String pluginRef = step != null && step.get("pluginRef") != null ? step.get("pluginRef").toString().trim() : null;
+            if (pluginRef == null || pluginRef.isBlank()) continue;
+            String promptVar = "__planner_step_" + i + "_prompt";
+            String responseVar = "__planner_step_" + i + "_response";
+            List<ParameterMapping> inputMappings = List.of(new ParameterMapping("prompt", promptVar));
+            List<ParameterMapping> outputMappings = List.of(new ParameterMapping("responseText", responseVar));
+            specs.add(NodeSpec.plugin("step-" + i + "-" + pluginRef, pluginRef, inputMappings, outputMappings));
+        }
+        return specs;
+    }
+
+    /**
+     * Builds execution tree nodes from SUBTREE_CREATOR plugin output. Each step is a map with "pluginRef" and "prompt".
+     * Enriches each node with pipeline and queue-based features via the injected enricher.
+     * Used by runPlannerReturnSteps (returns nodes without attaching to tree).
+     */
+    private List<ExecutionTreeNode> buildNodesFromCreatorSteps(List<Map<String, Object>> steps,
+                                                               PipelineFeatureContextImpl featureContext) {
         List<String> emptyStrList = List.of();
+        List<ExecutionTreeNode> nodes = new ArrayList<>();
         for (int i = 0; i < steps.size(); i++) {
             Map<String, Object> step = steps.get(i);
             String pluginRef = step != null && step.get("pluginRef") != null ? step.get("pluginRef").toString().trim() : null;
@@ -739,7 +794,7 @@ public final class NodeExecutionDispatcher {
                     Map.of(),
                     null, null, null
             );
-            nodes.add(child);
+            nodes.add(nodeFeatureEnricher.enrich(child, featureContext));
         }
         return nodes;
     }

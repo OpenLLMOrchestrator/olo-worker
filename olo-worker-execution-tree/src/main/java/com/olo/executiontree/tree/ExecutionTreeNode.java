@@ -174,6 +174,37 @@ public final class ExecutionTreeNode {
         );
     }
 
+    /**
+     * Returns a new node with the same fields but the given feature list.
+     * Use when attaching pipeline/queue features to planner-added or other dynamic nodes.
+     */
+    public static ExecutionTreeNode withFeatures(ExecutionTreeNode node, List<String> features) {
+        if (node == null) return null;
+        List<String> f = features != null ? List.copyOf(features) : List.of();
+        return new ExecutionTreeNode(
+                node.id,
+                node.displayName,
+                node.type,
+                node.children,
+                node.nodeType,
+                node.pluginRef,
+                node.inputMappings,
+                node.outputMappings,
+                f,
+                node.preExecution,
+                node.postExecution,
+                node.postSuccessExecution,
+                node.postErrorExecution,
+                node.finallyExecution,
+                node.featureRequired,
+                node.featureNotRequired,
+                node.params,
+                node.scheduleToStartSeconds,
+                node.startToCloseSeconds,
+                node.scheduleToCloseSeconds
+        );
+    }
+
     private static boolean isUuid(String s) {
         if (s == null || s.isBlank()) return false;
         try {

@@ -5,6 +5,8 @@ import com.olo.executiontree.config.ExecutionType;
 import com.olo.executiontree.config.PipelineConfiguration;
 import com.olo.executiontree.config.PipelineDefinition;
 import com.olo.executiontree.tree.ExecutionTreeNode;
+import com.olo.node.DynamicNodeBuilder;
+import com.olo.node.NodeFeatureEnricher;
 import com.olo.plugin.PluginExecutor;
 
 import com.olo.worker.engine.node.NodeExecutor;
@@ -30,13 +32,17 @@ public final class ExecutionEngine {
      * @param inputValues      workflow input name to value (IN variables)
      * @param pluginExecutor   plugin executor (contract; from {@link com.olo.plugin.PluginExecutorFactory})
      * @param tenantConfigMap  tenant-specific config map; may be null or empty
+     * @param dynamicNodeBuilder builder for fully designed dynamic nodes (from bootstrap); may be null
+     * @param nodeFeatureEnricher enricher for attaching pipeline features to existing nodes; may be null (no-op)
      * @return workflow result string from ResultMapper
      */
     public static String run(
             ExecutionConfigSnapshot snapshot,
             Map<String, Object> inputValues,
             PluginExecutor pluginExecutor,
-            Map<String, Object> tenantConfigMap) {
+            Map<String, Object> tenantConfigMap,
+            DynamicNodeBuilder dynamicNodeBuilder,
+            NodeFeatureEnricher nodeFeatureEnricher) {
         Objects.requireNonNull(snapshot, "snapshot");
         return run(
                 snapshot.getPipelineConfiguration(),
@@ -46,7 +52,9 @@ public final class ExecutionEngine {
                 pluginExecutor,
                 snapshot.getTenantId(),
                 tenantConfigMap,
-                snapshot.getRunId());
+                snapshot.getRunId(),
+                dynamicNodeBuilder,
+                nodeFeatureEnricher);
     }
 
     /** Internal: run with optional ledger run id so the executor thread can set LedgerContext (for olo_run_node when ASYNC). */
@@ -58,7 +66,9 @@ public final class ExecutionEngine {
             PluginExecutor pluginExecutor,
             String tenantId,
             Map<String, Object> tenantConfigMap,
-            String ledgerRunId) {
+            String ledgerRunId,
+            DynamicNodeBuilder dynamicNodeBuilder,
+            NodeFeatureEnricher nodeFeatureEnricher) {
         Objects.requireNonNull(config, "config");
         Objects.requireNonNull(pluginExecutor, "pluginExecutor");
         Map<String, PipelineDefinition> pipelines = config.getPipelines();
@@ -76,7 +86,7 @@ public final class ExecutionEngine {
                 ? Executors.newCachedThreadPool()
                 : null;
         try {
-            NodeExecutor nodeExecutor = new NodeExecutor(pluginInvoker, config, executionType, executor, tenantId, tenantConfigMap, ledgerRunId);
+            NodeExecutor nodeExecutor = new NodeExecutor(pluginInvoker, config, executionType, executor, tenantId, tenantConfigMap, ledgerRunId, dynamicNodeBuilder, nodeFeatureEnricher);
             ExecutionTreeNode root = pipeline.getExecutionTree();
             if (root != null) {
                 // Single source of truth: in-memory tree for this run. Planner mutates it (attachChildren); loop finds next.
@@ -108,6 +118,8 @@ public final class ExecutionEngine {
      * @param pluginExecutor  plugin executor (contract; from {@link com.olo.plugin.PluginExecutorFactory})
      * @param tenantId        tenant id (for feature context); may be null
      * @param tenantConfigMap tenant-specific config map; may be null or empty
+     * @param dynamicNodeBuilder builder for fully designed dynamic nodes; may be null
+     * @param nodeFeatureEnricher enricher for attaching pipeline features to existing nodes; may be null (no-op)
      * @return workflow result string from ResultMapper
      */
     public static String run(
@@ -116,7 +128,9 @@ public final class ExecutionEngine {
             Map<String, Object> inputValues,
             PluginExecutor pluginExecutor,
             String tenantId,
-            Map<String, Object> tenantConfigMap) {
+            Map<String, Object> tenantConfigMap,
+            DynamicNodeBuilder dynamicNodeBuilder,
+            NodeFeatureEnricher nodeFeatureEnricher) {
         Objects.requireNonNull(pipeline, "pipeline");
         Objects.requireNonNull(pluginExecutor, "pluginExecutor");
         VariableEngine variableEngine = new VariableEngine(pipeline, inputValues);
@@ -126,7 +140,7 @@ public final class ExecutionEngine {
                 ? Executors.newCachedThreadPool()
                 : null;
         try {
-            NodeExecutor nodeExecutor = new NodeExecutor(pluginInvoker, null, executionType, executor, tenantId, tenantConfigMap);
+            NodeExecutor nodeExecutor = new NodeExecutor(pluginInvoker, null, executionType, executor, tenantId, tenantConfigMap, dynamicNodeBuilder, nodeFeatureEnricher);
             ExecutionTreeNode root = pipeline.getExecutionTree();
             if (root != null) {
                 RuntimeExecutionTree runtimeTree = new RuntimeExecutionTree(root);

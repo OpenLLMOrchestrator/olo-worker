@@ -3,11 +3,12 @@
 -- For existing DBs, run the ALTERs in docs/run-ledger-schema.md (migration section).
 
 -- Run-level record: one row per execution run.
--- run_id, tenant_id, node_id: UUID for smaller storage, faster comparisons, cleaner indexes.
+-- id columns (run_id, tenant_id, node_id) are always UUID. name columns store semantic display names (e.g. "default", "root").
 -- olo_run: execution run only. Config snapshot lives in olo_config.
 CREATE TABLE IF NOT EXISTS olo_run (
     run_id                      UUID PRIMARY KEY,
     tenant_id                   UUID NOT NULL,
+    tenant_name                 VARCHAR(255),
     pipeline                    VARCHAR(255) NOT NULL,
     pipeline_checksum           VARCHAR(128),
     execution_engine_version    VARCHAR(64),
@@ -33,7 +34,9 @@ CREATE TABLE IF NOT EXISTS olo_run (
 CREATE TABLE IF NOT EXISTS olo_run_node (
     run_id                      UUID NOT NULL,
     tenant_id                   UUID,
+    tenant_name                 VARCHAR(255),
     node_id                     UUID NOT NULL,
+    node_name                   VARCHAR(255),
     node_type                   VARCHAR(64) NOT NULL,
     input_snapshot              JSONB,
     start_time                  TIMESTAMPTZ NOT NULL,
@@ -70,6 +73,7 @@ CREATE TABLE IF NOT EXISTS olo_run_node (
     failure_type                VARCHAR(128),
     -- Execution hierarchy (tree reconstruction, parallel/conditional/loop)
     parent_node_id              UUID,
+    parent_node_name            VARCHAR(255),
     execution_order             INT,
     depth                       INT,
     PRIMARY KEY (run_id, node_id),
@@ -90,6 +94,7 @@ CREATE INDEX IF NOT EXISTS idx_olo_run_node_parent ON olo_run_node(parent_node_i
 CREATE TABLE IF NOT EXISTS olo_config (
     run_id                  UUID PRIMARY KEY,
     tenant_id               UUID NOT NULL,
+    tenant_name             VARCHAR(255),
     pipeline                VARCHAR(255) NOT NULL,
     config_version          VARCHAR(64),
     snapshot_version_id     VARCHAR(64),

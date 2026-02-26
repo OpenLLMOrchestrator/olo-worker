@@ -39,6 +39,11 @@ public final class FeatureResolver {
             scopeFeatureNames = new ArrayList<>(scopeFeatureNames);
             scopeFeatureNames.add("ledger-node");
         }
+        // Ensure debug is included for -debug queues (static and dynamically created nodes get debug pre/post).
+        if (queueName != null && queueName.endsWith("-debug") && !scopeFeatureNames.contains("debug")) {
+            scopeFeatureNames = new ArrayList<>(scopeFeatureNames);
+            scopeFeatureNames.add("debug");
+        }
         return FeatureAttachmentResolver.resolve(node, queueName, scopeFeatureNames, registry);
     }
 

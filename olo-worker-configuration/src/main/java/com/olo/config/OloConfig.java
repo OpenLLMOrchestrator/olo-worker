@@ -266,7 +266,7 @@ public final class OloConfig {
                 .pipelineConfigRetryWaitSeconds(parseInt(System.getenv(ENV_CONFIG_RETRY_WAIT_SECONDS), DEFAULT_CONFIG_RETRY_WAIT_SECONDS))
                 .pipelineConfigKeyPrefix(getEnv(ENV_CONFIG_KEY_PREFIX, DEFAULT_CONFIG_KEY_PREFIX))
                 .tenantIds(tenants)
-                .runLedgerEnabled(parseBoolean(System.getenv(ENV_RUN_LEDGER), DEFAULT_RUN_LEDGER))
+                .runLedgerEnabled(parseBoolean(System.getenv(ENV_RUN_LEDGER), DEFAULT_RUN_LEDGER)) // OLO_RUN_LEDGER defaults to true when unset
                 .dbName(getEnv(ENV_DB_NAME, DEFAULT_DB_NAME))
                 .dbUser(getEnv(ENV_DB_USER, "temporal"))
                 .dbPassword(getEnv(ENV_DB_PASSWORD, "pgpass"))

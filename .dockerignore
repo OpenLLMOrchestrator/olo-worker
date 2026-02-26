@@ -1,0 +1,22 @@
+# Build and IDE
+.gradle
+**/build
+.git
+.gitignore
+.idea
+*.iml
+out
+.cursor
+
+# Docs (optional; remove if you need them in the image)
+# *.md
+# docs
+
+# Docker
+Dockerfile
+.dockerignore
+
+# Local / env
+.env
+.env.*
+*.log

@@ -7,9 +7,11 @@ import org.slf4j.LoggerFactory;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Deque;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * Mutable runtime tree: single source of truth for execution, debugger, and UI.
@@ -26,6 +28,8 @@ public final class RuntimeExecutionTree {
 
     private final Map<String, RuntimeNodeState> nodesById = new LinkedHashMap<>();
     private final String rootId;
+    /** Planner node ids that have already been expanded (idempotency guard for activity retry). */
+    private final Set<String> expandedPlannerNodeIds = new HashSet<>();
 
     public RuntimeExecutionTree(ExecutionTreeNode staticRoot) {
         if (staticRoot == null) {
@@ -98,6 +102,24 @@ public final class RuntimeExecutionTree {
         if (!addedIds.isEmpty() && log.isInfoEnabled()) {
             log.info("Tree attachChildren | parentId={} | added={} | childIds={}", parentNodeId, addedIds.size(), addedIds);
         }
+    }
+
+    /**
+     * Mark a planner node as already expanded. Call after {@link #attachChildren} for that parent
+     * so retries do not attach duplicate children (idempotency guard).
+     */
+    public void markPlannerExpanded(String plannerNodeId) {
+        if (plannerNodeId != null && !plannerNodeId.isBlank()) {
+            expandedPlannerNodeIds.add(plannerNodeId);
+            if (log.isDebugEnabled()) {
+                log.debug("Tree markPlannerExpanded | plannerNodeId={}", plannerNodeId);
+            }
+        }
+    }
+
+    /** True if this planner node has already been expanded (e.g. on a prior attempt before activity retry). */
+    public boolean hasPlannerExpanded(String plannerNodeId) {
+        return plannerNodeId != null && expandedPlannerNodeIds.contains(plannerNodeId);
     }
 
     public void markCompleted(String nodeId) {
@@ -182,5 +204,29 @@ public final class RuntimeExecutionTree {
 
     public List<RuntimeNodeState> getAllNodes() {
         return new ArrayList<>(nodesById.values());
+    }
+
+    /** Total number of nodes in the tree (static + dynamically attached). */
+    public int getTotalNodeCount() {
+        return nodesById.size();
+    }
+
+    /**
+     * Depth of the node: root = 0, its children = 1, etc. (number of edges to root.)
+     * Returns 0 if nodeId is null or not found.
+     */
+    public int getDepth(String nodeId) {
+        if (nodeId == null) return 0;
+        int depth = 0;
+        String current = nodeId;
+        while (current != null) {
+            RuntimeNodeState state = nodesById.get(current);
+            if (state == null) return 0;
+            String parent = state.getParentId();
+            if (parent == null) break;
+            depth++;
+            current = parent;
+        }
+        return depth;
     }
 }

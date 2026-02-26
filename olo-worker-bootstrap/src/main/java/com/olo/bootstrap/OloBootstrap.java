@@ -157,10 +157,13 @@ public final class OloBootstrap {
                 jdbcStore.ensureSchema();
                 LedgerStore ledgerStore = jdbcStore;
                 runLedger = new RunLedger(ledgerStore);
+                log.info("Run ledger: JDBC store enabled; run and node records will be persisted to olo_run, olo_config, olo_run_node.");
             } catch (Exception e) {
-                log.warn("Run ledger using no-op store: could not create or init JDBC store ({}). Execution continues.", e.getMessage());
+                log.warn("Run ledger using no-op store: could not create or init JDBC store ({}). Execution continues. No ledger entries will be persisted.", e.getMessage());
                 runLedger = new RunLedger(new NoOpLedgerStore());
             }
+        } else {
+            log.info("Run ledger disabled (OLO_RUN_LEDGER=false or unset). Set OLO_RUN_LEDGER=true for run/node persistence.");
         }
 
         OloSessionCache sessionCache = new OloSessionCache(config);
@@ -169,7 +172,9 @@ public final class OloBootstrap {
         validateAllPipelineConfigs(ctx);
 
         com.olo.plugin.PluginExecutorFactory pluginExecutorFactory = new DefaultPluginExecutorFactory();
-        return new WorkerBootstrapContextImpl(ctx, runLedger, sessionCache, pluginExecutorFactory);
+        com.olo.node.DynamicNodeBuilder dynamicNodeBuilder = com.olo.bootstrap.node.PipelineDynamicNodeBuilder.getInstance();
+        com.olo.node.NodeFeatureEnricherFactory nodeFeatureEnricherFactory = com.olo.bootstrap.node.DefaultNodeFeatureEnricherFactory.getInstance();
+        return new WorkerBootstrapContextImpl(ctx, runLedger, sessionCache, pluginExecutorFactory, dynamicNodeBuilder, nodeFeatureEnricherFactory);
     }
 
     private static void runBootstrapContributors(BootstrapContextImpl ctx, PluginManager pluginManager) {

@@ -18,7 +18,7 @@ Java Gradle application that runs a Temporal worker with task queues and infrast
 | `OLO_DB_HOST` | Database host | `localhost` |
 | `OLO_DB_PORT` | Database port | `5432` |
 | `OLO_DB_NAME` | Database name (default: `temporal`) | `temporal` |
-| `OLO_RUN_LEDGER` | When `true`, persist run/node records to DB (olo_run, olo_run_node, olo_config). Default true in dev. | `true` |
+| `OLO_RUN_LEDGER` | When `true`, persist run/node records to DB (olo_run, olo_run_node, olo_config). **Default: true** when unset. Set to `false` to disable. | `true` |
 | `OLO_TENANT_IDS` | Comma-separated tenant ids when Redis `olo:tenants` is not set | `default` |
 | `OLO_DEFAULT_TENANT_ID` | Tenant id when workflow `context.tenantId` is missing or blank | `2a2a91fb-f5b4-4cf0-b917-524d242b2e3d` |
 | `OLO_SESSION_DATA` | Session key prefix; workflow input stored at `<tenantId>:olo:kernel:sessions:<transactionId>:USERINPUT` | `<tenant>:olo:kernel:sessions:` |
@@ -74,10 +74,32 @@ export OLO_DB_PORT=5432
 ./gradlew :olo-worker:run
 ```
 
+## Docker
+
+Build the image (from the repo root):
+
+```bash
+docker build -t olo-worker:latest .
+```
+
+Run the worker (pass env vars and ensure the container can reach Temporal, Redis, DB as needed):
+
+```bash
+docker run --rm -e OLO_QUEUE=olo-chat-queue-oolama -e OLO_IS_DEBUG_ENABLED=true \
+  -e OLO_CACHE_HOST=host.docker.internal -e OLO_CACHE_PORT=6379 \
+  -e OLO_TENANT_IDS=default \
+  olo-worker:latest
+```
+
+Pipeline config is included in the image under `/app/config`. Temporal target/namespace come from that config. Use `-v` to override config or env vars as needed.
+
+**CI:** Pushes to `main`/`master` and published releases trigger [GitHub Actions](.github/workflows/docker-publish.yml) to build and push the image to [GitHub Container Registry](https://docs.github.com/en/packages/working-with-a-github-packages-registry/working-with-the-container-registry). Image: `ghcr.io/<owner>/<repo>:latest` (replace `<owner>/<repo>` with your GitHub org/repo). For private images, use a PAT with `read:packages` when pulling.
+
 ## Project layout (multi-module)
 
 - **Root** — parent Gradle project; no application code.
 - **olo-annotations** — `@OloFeature`, `@OloPlugin`, `@OloUiComponent`; ResourceCleanup; annotation processor for feature/plugin/UI metadata.
+- **olo-worker-protocol** — Contracts only (no impl): `BootstrapContext`, `WorkerBootstrapContext`, `BootstrapContributor`; `PluginExecutor`, `PluginExecutorFactory`. Lets plugins, tools, and features depend on the contract without pulling in bootstrap or plugin implementation.
 - **olo-worker-configuration** — `OloConfig` from env (queues, cache, DB, session/config prefixes, **OLO_TENANT_IDS**, **OLO_DEFAULT_TENANT_ID**); `OloSessionCache`; TenantConfig / TenantConfigRegistry.
 - **olo-worker-input** — `WorkflowInput`, `InputItem`, `Context`, `Routing`, `Metadata`; storage modes (LOCAL, CACHE, FILE).
 - **olo-worker-execution-tree** — Pipeline model, `ExecutionTreeNode`, `GlobalConfigurationContext`, configuration loader (Redis/DB/file).
@@ -87,10 +109,12 @@ export OLO_DB_PORT=5432
 - **olo-feature-debug** — DebuggerFeature (pre/post logging when queue ends with `-debug`).
 - **olo-feature-quota** — QuotaFeature (per-tenant soft/hard limits from Redis activeWorkflows).
 - **olo-feature-metrics** — MetricsFeature (node execution counters).
-- **olo-worker-plugin** — ModelExecutorPlugin, PluginRegistry (tenant-scoped).
+- **olo-worker-plugin** — ModelExecutorPlugin, PluginRegistry (tenant-scoped); `PluginExecutorFactory` impl; PluginManager, PluginProvider.
 - **olo-plugin-ollama** — Ollama model-executor plugin.
-- **olo-worker-bootstrap** — `OloBootstrap.initialize()`: tenant list (Redis olo:tenants or OLO_TENANT_IDS), GlobalConfigurationContext, BootstrapContext.
-- **olo-worker** — Application: `OloWorkerApplication`; Temporal client and workers per task queue; **OloKernelWorkflow** / **OloKernelWorkflowImpl**; OloKernelActivitiesImpl; ExecutionEngine, NodeExecutor, PluginInvoker, ResultMapper.
+- **olo-worker-bootstrap** — `OloBootstrap.initialize()` → `BootstrapContext`; `OloBootstrap.initializeWorker()` → `WorkerBootstrapContext` (adds runLedger, sessionCache, pluginExecutorFactory, runResourceCleanup). Loads tenant list and pipeline config; runs **BootstrapContributor**s (e.g. planner); registers plugins/tools and features; returns context so the worker only starts Temporal.
+- **olo-worker** — Application: `OloWorkerApplication` calls `OloBootstrap.initializeWorker()` and uses `WorkerBootstrapContext`; Temporal client and workers per task queue; **OloKernelWorkflow** / **OloKernelWorkflowImpl**; **OloKernelActivitiesImpl** and **ExecuteNodeDynamicActivity** (one activity per leaf when tree is linear); ExecutionEngine, NodeExecutor, PluginInvoker (uses protocol `PluginExecutor`), ResultMapper. Shutdown calls `ctx.runResourceCleanup()`.
+
+Additional modules (see [docs/architecture-and-features.md](docs/architecture-and-features.md)): olo-worker-tools, olo-join-reducer, olo-internal-plugins, olo-internal-tools, olo-planner, olo-planner-a, and various **olo-plugin-*** / **olo-tool-*** modules.
 
 See [docs/architecture-and-features.md](docs/architecture-and-features.md) for the full module map and data flow.
 

@@ -7,6 +7,7 @@ import com.olo.config.OloSessionCache;
 import com.olo.ledger.RunLedger;
 import com.olo.plugin.PluginExecutorFactory;
 import com.olo.worker.activity.ExecuteNodeDynamicActivity;
+import com.olo.ledger.NoOpLedgerStore;
 import com.olo.worker.activity.OloKernelActivitiesImpl;
 import com.olo.worker.workflow.OloKernelWorkflowImpl;
 import io.temporal.client.WorkflowClient;
@@ -43,6 +44,10 @@ public final class OloWorkerApplication {
         }
 
         RunLedger runLedger = ctx.getRunLedger() instanceof RunLedger ? (RunLedger) ctx.getRunLedger() : null;
+        if (runLedger == null) {
+            log.warn("Run ledger is null from bootstrap (OLO_RUN_LEDGER=false or unset). Using no-op ledger so runId is set and node ledger path runs; no rows will be persisted. Set OLO_RUN_LEDGER=true and ensure DB is reachable for olo_run/olo_config/olo_run_node.");
+            runLedger = new RunLedger(new NoOpLedgerStore());
+        }
         OloSessionCache sessionCache = (OloSessionCache) ctx.getSessionCache();
 
         String temporalTarget = ctx.getTemporalTargetOrDefault("localhost:7233");
@@ -66,7 +71,9 @@ public final class OloWorkerApplication {
                 .build();
 
         PluginExecutorFactory pluginExecutorFactory = ctx.getPluginExecutorFactory();
-        OloKernelActivitiesImpl oloKernelActivities = new OloKernelActivitiesImpl(sessionCache, tenantIds, runLedger, pluginExecutorFactory);
+        var dynamicNodeBuilder = ctx.getDynamicNodeBuilder();
+        var nodeFeatureEnricher = ctx.getNodeFeatureEnricherFactory().getEnricher();
+        OloKernelActivitiesImpl oloKernelActivities = new OloKernelActivitiesImpl(sessionCache, tenantIds, runLedger, pluginExecutorFactory, dynamicNodeBuilder, nodeFeatureEnricher);
         ExecuteNodeDynamicActivity executeNodeDynamicActivity = new ExecuteNodeDynamicActivity(oloKernelActivities);
 
         for (String taskQueue : taskQueues) {
