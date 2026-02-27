@@ -29,8 +29,15 @@ public final class RunLedger {
     public void runStarted(String runId, String tenantId, String pipeline, String configVersion,
                            String snapshotVersionId, String pluginVersionsJson, String inputJson, long startTimeMillis,
                            String pipelineChecksum, String executionEngineVersion) {
+        runStarted(runId, tenantId, pipeline, configVersion, snapshotVersionId, pluginVersionsJson, inputJson, startTimeMillis, pipelineChecksum, executionEngineVersion, null, null);
+    }
+
+    public void runStarted(String runId, String tenantId, String pipeline, String configVersion,
+                           String snapshotVersionId, String pluginVersionsJson, String inputJson, long startTimeMillis,
+                           String pipelineChecksum, String executionEngineVersion,
+                           String configTreeJson, String tenantConfigJson) {
         try {
-            store.runStarted(runId, tenantId, pipeline, configVersion, snapshotVersionId, pluginVersionsJson, inputJson, startTimeMillis, pipelineChecksum, executionEngineVersion);
+            store.runStarted(runId, tenantId, pipeline, configVersion, snapshotVersionId, pluginVersionsJson, inputJson, startTimeMillis, pipelineChecksum, executionEngineVersion, configTreeJson, tenantConfigJson);
         } catch (Throwable t) {
             log.warn("Ledger runStarted failed (runId={}); execution continues. Fix DB schema or connection. Error: {}", runId, t.getMessage(), t);
         }
@@ -105,8 +112,14 @@ public final class RunLedger {
 
     public void configRecorded(String runId, String tenantId, String pipeline, String configVersion,
                               String snapshotVersionId, String pluginVersionsJson) {
+        configRecorded(runId, tenantId, pipeline, configVersion, snapshotVersionId, pluginVersionsJson, null, null);
+    }
+
+    public void configRecorded(String runId, String tenantId, String pipeline, String configVersion,
+                              String snapshotVersionId, String pluginVersionsJson,
+                              String configTreeJson, String tenantConfigJson) {
         try {
-            store.configRecorded(runId, tenantId, pipeline, configVersion, snapshotVersionId, pluginVersionsJson);
+            store.configRecorded(runId, tenantId, pipeline, configVersion, snapshotVersionId, pluginVersionsJson, configTreeJson, tenantConfigJson);
         } catch (Throwable t) {
             log.warn("Ledger configRecorded failed (runId={}); execution continues. Error: {}", runId, t.getMessage(), t);
         }

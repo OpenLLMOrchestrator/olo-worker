@@ -99,6 +99,8 @@ CREATE TABLE IF NOT EXISTS olo_config (
     config_version          VARCHAR(64),
     snapshot_version_id     VARCHAR(64),
     plugin_versions         TEXT,
+    config_tree_json        JSONB,
+    tenant_config_json      JSONB,
     created_at              TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (run_id) REFERENCES olo_run(run_id) ON DELETE CASCADE
 );

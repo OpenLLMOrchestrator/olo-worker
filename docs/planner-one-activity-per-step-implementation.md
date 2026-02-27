@@ -271,7 +271,38 @@ So the planner either uses a **plugin** that returns a list of step maps (path A
 
 ---
 
-## 10. File Reference
+## 10. Run ledger: single runId for the per-node (planner) run
+
+When the execution plan is linear, the workflow runs **one activity per node** (PLANNER, then each dynamic step). Without a shared run id, each activity would create a **new** run row in **olo_run**, so one logical run would produce multiple run rows. The implementation ensures **one run_id per logical run** as follows.
+
+### 10.1 runId in the plan
+
+- **getExecutionPlan** (in **OloKernelActivitiesImpl**) builds the plan JSON when the tree is linear (or has parallel steps). It now adds a **runId** field: `out.put("runId", UUID.randomUUID().toString())`. That UUID is generated once per plan.
+- The workflow receives this plan and passes the **same** `planJson` (including `runId`) to **every** `executeNode` call for that workflow run (PLANNER first, then each dynamic step).
+
+### 10.2 executeNode: reuse runId and ledger lifecycle
+
+- In **executeNode(payloadJson)** the activity parses the plan and reads **runId** from it: `plan.get("runId")`. If present and non-blank, that value is **reused** as the run id for this invocation; otherwise a new UUID is generated (e.g. for older clients or missing field).
+- The activity sets **LedgerContext.setRunId(runId)** (thread-local) and passes **runId** into **NodeExecutor** as `ledgerRunId`, so the executor also sets LedgerContext at the start of each node. **NodeLedgerFeature** (and any feature that needs the current run) then sees a non-null runId and persists node records under the same run.
+- **runStarted(runId, ...)** is called **only on the first node** in the plan. The activity uses **isFirstNodeInPlan(plan, nodeId)** to detect whether the current node is the first in the plan’s `nodes` or `steps` list. Only then does it call `effectiveRunLedger.runStarted(runId, ...)`, so only **one** row is inserted into **olo_run** per logical run.
+- **runEnded(runId, ...)** is called in the activity’s **finally** block for **every** executeNode invocation. Each call updates the same **olo_run** row (same run_id); the last node’s update wins (final status, end_time, etc.). This works for dynamic steps too, since the “last” activity to finish updates the run row.
+
+### 10.3 Summary
+
+| Step | Where | What happens |
+|------|--------|----------------|
+| 1 | **getExecutionPlan** | Plan JSON includes `runId: "<uuid>"` (one per plan). |
+| 2 | **Workflow** | Passes same `planJson` to every executeNode (PLANNER, then each step). |
+| 3 | **executeNode** | Reuses runId from plan; sets LedgerContext; passes runId to NodeExecutor. |
+| 4 | **First node (e.g. PLANNER)** | `isFirstNodeInPlan` true → `runStarted(runId, ...)` (one olo_run INSERT). |
+| 5 | **Every node** | NodeLedgerFeature sees non-null LedgerContext → olo_run_node INSERT/UPDATE. |
+| 6 | **Every node (finally)** | `runEnded(runId, ...)` updates olo_run; last invocation sets final state. |
+
+Result: **one olo_run row** and **one olo_run_node row per node** (PLANNER + each dynamic step), all with the same **run_id**. See **docs/run-ledger-schema.md** (§ Run ledger implementation details) for the full description of both execution paths (runExecutionTree and executeNode).
+
+---
+
+## 11. File Reference
 
 | Layer | File | Key methods / types |
 |-------|------|----------------------|

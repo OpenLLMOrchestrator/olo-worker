@@ -15,7 +15,15 @@ public interface LedgerStore {
     default void runStarted(String runId, String tenantId, String pipeline, String configVersion,
                             String snapshotVersionId, String pluginVersionsJson, String inputJson, long startTimeMillis,
                             String pipelineChecksum, String executionEngineVersion) {
-        runStarted(runId, tenantId, pipeline, configVersion, snapshotVersionId, pluginVersionsJson, inputJson, startTimeMillis);
+        runStarted(runId, tenantId, pipeline, configVersion, snapshotVersionId, pluginVersionsJson, inputJson, startTimeMillis, pipelineChecksum, executionEngineVersion, null, null);
+    }
+
+    /** Run start with optional config tree and tenant config JSON for olo_config (serialized pipeline definition and tenant config). */
+    default void runStarted(String runId, String tenantId, String pipeline, String configVersion,
+                            String snapshotVersionId, String pluginVersionsJson, String inputJson, long startTimeMillis,
+                            String pipelineChecksum, String executionEngineVersion,
+                            String configTreeJson, String tenantConfigJson) {
+        runStarted(runId, tenantId, pipeline, configVersion, snapshotVersionId, pluginVersionsJson, inputJson, startTimeMillis, pipelineChecksum, executionEngineVersion);
     }
 
     void runEnded(String runId, long endTimeMillis, String finalOutput, String status);
@@ -52,7 +60,17 @@ public interface LedgerStore {
      */
     default void configRecorded(String runId, String tenantId, String pipeline, String configVersion,
                                 String snapshotVersionId, String pluginVersionsJson) {
-        // no-op by default
+        configRecorded(runId, tenantId, pipeline, configVersion, snapshotVersionId, pluginVersionsJson, null, null);
+    }
+
+    /**
+     * Record config with optional serialized execution tree and tenant config (writes to olo_config).
+     * configTreeJson: pipeline definition or execution tree JSON; tenantConfigJson: tenant config map JSON.
+     */
+    default void configRecorded(String runId, String tenantId, String pipeline, String configVersion,
+                                String snapshotVersionId, String pluginVersionsJson,
+                                String configTreeJson, String tenantConfigJson) {
+        configRecorded(runId, tenantId, pipeline, configVersion, snapshotVersionId, pluginVersionsJson);
     }
 
     /** Node end with AI metrics (MODEL/PLANNER), replay meta, and failure meta. */

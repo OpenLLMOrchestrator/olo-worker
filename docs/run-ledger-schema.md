@@ -10,7 +10,7 @@ The canonical schema is in **`olo-run-ledger/src/main/resources/schema/olo-ledge
 
 - **olo_run** — One row per execution run. **run_id** (UUID PK), **tenant_id** (UUID NOT NULL), **tenant_name** (VARCHAR(255), semantic name e.g. "default"), pipeline, input_json (JSONB), **start_time** / **end_time** (TIMESTAMPTZ), status, total_nodes, total_cost, total_tokens, duration_ms, error_message, failure_stage, total_prompt_tokens, total_completion_tokens, currency. Config snapshot fields live in **olo_config** only.
 - **olo_run_node** — One row per node **attempt**. **run_id** (UUID), **tenant_id** (UUID, nullable), **tenant_name** (VARCHAR(255)), **node_id** (UUID), **node_name** (VARCHAR(255), semantic name e.g. "root", "plannerNode"), node_type, input_snapshot/output_snapshot (JSONB), start_time/end_time (TIMESTAMPTZ), status, error_code, error_message, error_details (JSONB), token/cost columns, model_name, provider, replay columns, retry columns, **parent_node_id** (UUID), **parent_node_name** (VARCHAR(255)), execution_order, depth. FK run_id → olo_run ON DELETE CASCADE.
-- **olo_config** — Immutable config snapshot per run. **run_id** (UUID PK, FK → olo_run), **tenant_id** (UUID NOT NULL), **tenant_name** (VARCHAR(255)), pipeline, config_version, snapshot_version_id, plugin_versions, created_at (TIMESTAMPTZ). Written once at run start by `JdbcLedgerStore.configRecorded()` (called from `runStarted()`).
+- **olo_config** — Immutable config snapshot per run. **run_id** (UUID PK, FK → olo_run), **tenant_id** (UUID NOT NULL), **tenant_name** (VARCHAR(255)), pipeline, config_version, snapshot_version_id, plugin_versions, **config_tree_json** (JSONB, serialized pipeline definition / execution tree), **tenant_config_json** (JSONB, serialized tenant config map), created_at (TIMESTAMPTZ). Written once at run start by `JdbcLedgerStore.configRecorded()` (called from `runStarted()`).
 
 **Id vs name:** All **id** columns (run_id, tenant_id, node_id, parent_node_id) are **always UUID**. **Name** columns (tenant_name, node_name, parent_node_name) store the semantic/display identifier (e.g. "default", "root", "plannerNode") when the app passes a non-UUID; use name for display and querying by human-readable id.
 
@@ -68,6 +68,10 @@ ALTER TABLE olo_run_node ADD COLUMN IF NOT EXISTS parent_node_id UUID;
 ALTER TABLE olo_run_node ADD COLUMN IF NOT EXISTS execution_order INT;
 ALTER TABLE olo_run_node ADD COLUMN IF NOT EXISTS depth INT;
 CREATE INDEX IF NOT EXISTS idx_olo_run_node_parent ON olo_run_node(parent_node_id);
+
+-- Add olo_config columns for serialized config tree and tenant config (audit)
+ALTER TABLE olo_config ADD COLUMN IF NOT EXISTS config_tree_json JSONB;
+ALTER TABLE olo_config ADD COLUMN IF NOT EXISTS tenant_config_json JSONB;
 ```
 
 **Migrating existing VARCHAR IDs to UUID** (only if current columns are varchar/text):
@@ -140,3 +144,61 @@ The run ledger is **write-only** and **append-only**. It does not update previou
 - **Per node attempt:** When a node is retried (e.g. by a RETRY parent), **each attempt is recorded separately**. One row per `(run_id, node_id, attempt)`.
 - **Uniqueness:** Uniqueness is enforced by **run_id + node_id + attempt**. The schema today uses PK `(run_id, node_id)`; to support multiple attempts per node, the primary key is extended to include **attempt** (e.g. `(run_id, node_id, attempt)`), so each attempt is a distinct row. No in-place update of a previous attempt’s row.
 - **Implications:** NodeLedgerFeature (and the store) write one **INSERT** at node start and one **UPDATE** for that same row at node end, keyed by `(run_id, node_id, attempt)`. When the runtime supports retries, it passes the current attempt number so the ledger can insert a new row per attempt and update only that row on end. Until **attempt** is part of the key and the runtime passes it, nodes that are retried may only persist the last attempt’s outcome in the current schema.
+
+---
+
+## Run ledger implementation details
+
+This section documents how the worker creates and reuses **run_id**, when **runStarted** / **runEnded** and node records are written, and how the **per-node (linear/dynamic)** execution path shares a single run across multiple activity invocations.
+
+### Two execution paths
+
+The workflow can run in two ways:
+
+1. **Single-activity path (runExecutionTree)**  
+   When the execution tree is non-linear (e.g. IF, SWITCH, FORK) or the plan is not linear, the workflow calls **one** activity: `runExecutionTree(queueName, workflowInputJson)`. That activity runs the full tree in one JVM call via `ExecutionEngine.run(...)`. One runId is created at the start of the activity; all nodes run on the same thread (or same runId is passed into async branches).
+
+2. **Per-node path (executeNode)**  
+   When the plan is linear (only SEQUENCE, GROUP, and leaf nodes), the workflow calls **one activity per node**: `executeNode(activityType, planJson, nodeId, variableMapJson, queueName, workflowInputJson, dynamicStepsJson)`. Each invocation is a separate Temporal activity; without a shared runId, each would create a new run row. The implementation **reuses a single runId** for the whole logical run (see below).
+
+### Where runId is created and LedgerContext set
+
+- **LedgerContext** (`olo-run-ledger`) is a **thread-local** holder for the current run id. **NodeLedgerFeature** (and any code that needs the current run) reads `LedgerContext.getRunId()`. If it is null, the feature skips persisting (and logs a warning). So runId must be set on the **same thread** that runs the node.
+
+- **runExecutionTree path**  
+  - At the start of the activity: a new **runId** is generated (`UUID.randomUUID().toString()`). If the bootstrap did not provide a RunLedger, an **effectiveRunLedger** is used: `runLedger != null ? runLedger : new RunLedger(new NoOpLedgerStore())`, so runId is always set.  
+  - The activity sets `LedgerContext.setRunId(runId)`, builds an **ExecutionConfigSnapshot** with that runId, and calls `ExecutionEngine.run(snapshot, ...)`.  
+  - **ExecutionEngine** creates a **NodeExecutor** with `ledgerRunId = snapshot.getRunId()`. **NodeExecutor** sets `LedgerContext.setRunId(ledgerRunId)` at the start of each node execution (and in async branches) so node features always see a non-null runId.  
+  - In a `finally` block the activity calls `effectiveRunLedger.runEnded(...)` and `LedgerContext.clear()`.
+
+- **executeNode path (per-node)**  
+  - The **execution plan** (from `getExecutionPlan`) now includes a **runId** field: when the plan is built (linear or parallel steps), the activity adds `out.put("runId", UUID.randomUUID().toString())`. The same plan JSON is passed to **every** `executeNode` call for that workflow run.  
+  - In **executeNode(payloadJson)**: the activity reads **runId from the plan** (`plan.get("runId")`). If present and non-blank, that value is **reused** as the runId for this invocation; otherwise a new UUID is generated (backward compatibility). So all nodes in a single logical run (PLANNER, then PLUGIN, then dynamic steps) share the **same runId**.  
+  - The activity sets `LedgerContext.setRunId(runId)` and passes **runId** into **NodeExecutor** as `ledgerRunId`, so the executor also sets LedgerContext at the start of each node (and clears in finally).  
+  - **runStarted** is called **only on the first node** in the plan: `isFirstNodeInPlan(plan, nodeId)` checks whether the current node is the first in the plan's `nodes` or `steps` list. Only then does the activity call `effectiveRunLedger.runStarted(runId, ...)`. So only one **olo_run** row is created per logical run.  
+  - **runEnded** is called in the activity's `finally` block **for every** executeNode invocation. Each call updates the same **olo_run** row (same run_id); the last node's update wins (final status, end_time, etc.). This works even when the "last" node is a dynamic step not present in the plan's nodes list.  
+  - If the bootstrap did not provide a RunLedger, **effectiveRunLedger** is again a no-op: `new RunLedger(new NoOpLedgerStore())`, so runId is still set and node features do not skip.
+
+### Single runId for per-node (linear/dynamic) runs — summary
+
+| Step | Where | What happens |
+|------|--------|----------------|
+| 1 | **getExecutionPlan** | Plan JSON is built with `runId: "<uuid>"` (one per plan). |
+| 2 | **Workflow** | Passes the same `planJson` (including runId) to every `executeNode(..., planJson, ...)`. |
+| 3 | **executeNode** | Reads `runId` from plan; reuses it; sets LedgerContext and passes it to NodeExecutor. |
+| 4 | **First node only** | `isFirstNodeInPlan(plan, nodeId)` is true → call `runStarted(runId, ...)` (one olo_run INSERT). |
+| 5 | **Every node** | NodeLedgerFeature sees non-null LedgerContext → INSERT/UPDATE olo_run_node for that node. |
+| 6 | **Every node (finally)** | Call `runEnded(runId, ...)` so olo_run row is updated; last invocation sets final state. |
+
+Result: one **olo_run** row per logical run and one **olo_run_node** row per node, all with the same **run_id**, for both static linear nodes and planner-injected dynamic steps.
+
+### JdbcLedgerStore: nodeStarted INSERT and JSONB
+
+- **Parameter count:** The PostgreSQL JDBC driver can treat `?::jsonb` in SQL as **two** placeholders, which leads to "No value specified for parameter 14/15". To avoid that, the **input_snapshot** column is bound using a **plain `?`** and a **PGobject** with type `"jsonb"` (`org.postgresql.util.PGobject`). Helper: `toJsonbPgObject(String json)` creates the object; `ps.setObject(7, toJsonbPgObject(...))` so the driver sees exactly one placeholder per column.  
+- **attempt column:** The **olo_run_node** INSERT includes an **attempt** column (value `1` at node start). This satisfies binding and supports future per-attempt rows when the schema and runtime use attempt in the key.
+
+### Bootstrap and fallbacks
+
+- **OLO_RUN_LEDGER:** Default is **true** when unset (`OloConfig`). Set to `false` to disable the ledger.  
+- If the bootstrap **does not** provide a RunLedger (e.g. JDBC init failed or ledger disabled), **OloWorkerApplication** can use a fallback `RunLedger(new NoOpLedgerStore())` so the activity always has a non-null RunLedger.  
+- In the activity (**runExecutionTree** and **executeNode**), if the injected RunLedger is null, **effectiveRunLedger** is set to `new RunLedger(new NoOpLedgerStore())` so LedgerContext and runId are still set and node features do not skip; no DB rows are written when using the no-op store.

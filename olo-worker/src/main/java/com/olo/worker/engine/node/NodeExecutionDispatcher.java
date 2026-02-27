@@ -5,23 +5,16 @@ import com.olo.executiontree.config.PipelineConfiguration;
 import com.olo.executiontree.config.PipelineDefinition;
 import com.olo.executiontree.tree.ExecutionTreeNode;
 import com.olo.executiontree.tree.NodeType;
-import com.olo.executiontree.tree.ParameterMapping;
 import com.olo.ledger.LedgerContext;
 import com.olo.node.DynamicNodeBuilder;
-import com.olo.node.DynamicNodeExpansionRequest;
-import com.olo.node.DynamicNodeFactory;
-import com.olo.node.ExpandedNode;
-import com.olo.node.ExpansionResult;
 import com.olo.node.NodeFeatureEnricher;
-import com.olo.node.NodeSpec;
-import com.olo.node.PipelineFeatureContextImpl;
 import com.olo.planner.PlannerContract;
 import com.olo.planner.PromptTemplateProvider;
-import com.olo.planner.SubtreeBuilder;
-import com.olo.planner.SubtreeBuilderRegistry;
 import com.olo.worker.engine.PluginInvoker;
 import com.olo.worker.engine.VariableEngine;
 import com.olo.worker.engine.runtime.RuntimeExecutionTree;
+import com.olo.worker.engine.node.handlers.HandlerContext;
+import com.olo.worker.engine.node.handlers.PlannerHandler;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -43,25 +36,15 @@ public final class NodeExecutionDispatcher {
 
     private static final Logger log = LoggerFactory.getLogger(NodeExecutionDispatcher.class);
 
-    private final PluginInvoker pluginInvoker;
-    private final PipelineConfiguration config;
-    private final ExecutionType executionType;
-    private final ExecutorService executor;
-    private final String ledgerRunId;
-    private final DynamicNodeBuilder dynamicNodeBuilder;
-    private final NodeFeatureEnricher nodeFeatureEnricher;
+    private final HandlerContext handlerContext;
+    private final PlannerHandler plannerHandler;
 
     public NodeExecutionDispatcher(PluginInvoker pluginInvoker, PipelineConfiguration config,
                                    ExecutionType executionType, ExecutorService executor,
                                    String ledgerRunId, DynamicNodeBuilder dynamicNodeBuilder,
                                    NodeFeatureEnricher nodeFeatureEnricher) {
-        this.pluginInvoker = pluginInvoker;
-        this.config = config;
-        this.executionType = executionType != null ? executionType : ExecutionType.SYNC;
-        this.executor = executor;
-        this.ledgerRunId = ledgerRunId;
-        this.dynamicNodeBuilder = dynamicNodeBuilder;
-        this.nodeFeatureEnricher = nodeFeatureEnricher != null ? nodeFeatureEnricher : (n, c) -> n;
+        this.handlerContext = new HandlerContext(pluginInvoker, config, executionType, executor, ledgerRunId, dynamicNodeBuilder, nodeFeatureEnricher);
+        this.plannerHandler = new PlannerHandler();
     }
 
     /**
@@ -84,7 +67,7 @@ public final class NodeExecutionDispatcher {
             case FORK -> executeFork(node, pipeline, variableEngine, queueName, runChild, runChildSync);
             case JOIN -> executeJoin(node, pipeline, variableEngine, queueName, runChild);
             case GROUP -> executeSequence(node, pipeline, variableEngine, queueName, runChild);
-            case PLUGIN -> pluginInvoker.invoke(node, variableEngine);
+            case PLUGIN -> handlerContext.getPluginInvoker().invoke(node, variableEngine);
             case CASE -> executeCase(node, pipeline, variableEngine, queueName, runChild);
             case TRY_CATCH -> executeTryCatch(node, pipeline, variableEngine, queueName, runChild);
             case RETRY -> executeRetry(node, pipeline, variableEngine, queueName, runChild);
@@ -121,12 +104,12 @@ public final class NodeExecutionDispatcher {
             case SEQUENCE, GROUP, CASE -> null;
             case IF -> executeIfTree(node, pipeline, variableEngine, tree);
             case SWITCH -> executeSwitchTree(node, pipeline, variableEngine, tree);
-            case PLANNER -> executePlannerTree(node, pipeline, variableEngine, queueName, tree, expansionState, expansionLimits);
+            case PLANNER -> plannerHandler.dispatchWithTree(node, pipeline, variableEngine, queueName, tree, subtreeRunner, expansionState, expansionLimits, handlerContext);
             case PLUGIN -> {
                 if (log.isInfoEnabled()) {
                     log.info("Invoking PLUGIN | nodeId={} | pluginRef={} | displayName={}", node.getId(), node.getPluginRef(), node.getDisplayName());
                 }
-                yield pluginInvoker.invoke(node, variableEngine);
+                yield handlerContext.getPluginInvoker().invoke(node, variableEngine);
             }
             case FILL_TEMPLATE -> executeFillTemplate(node, variableEngine, queueName);
             case EVENT_WAIT -> executeEventWait(node, variableEngine);
@@ -202,213 +185,13 @@ public final class NodeExecutionDispatcher {
         return null;
     }
 
-    /** Planner node: run activity, parse plan, attach children to tree, return. Do not run children here. */
-    private Object executePlannerTree(ExecutionTreeNode node, PipelineDefinition pipeline,
-                                     VariableEngine variableEngine, String queueName, RuntimeExecutionTree tree,
-                                     ExpansionState expansionState, ExpansionLimits expansionLimits) {
-        String modelPluginRef = NodeParams.paramString(node, "modelPluginRef");
-        boolean interpretOnly = (modelPluginRef == null || modelPluginRef.isBlank());
-        String parserName = NodeParams.paramString(node, "parser");
-        if (parserName == null || parserName.isBlank()) parserName = NodeParams.paramString(node, "treeBuilder");
-        if (parserName == null || parserName.isBlank()) parserName = "default";
-        String subtreeCreatorPluginRef = NodeParams.paramString(node, "subtreeCreatorPluginRef");
-        log.info("Executing PLANNER | nodeId={} | mode={} | modelPluginRef={} | parser={} | subtreeCreator={}",
-                node.getId(), interpretOnly ? "interpretOnly" : "model", modelPluginRef, parserName, subtreeCreatorPluginRef != null && !subtreeCreatorPluginRef.isBlank() ? subtreeCreatorPluginRef : "-");
-        log.info("PLANNER step 1 | nodeId={} | entry | tree present", node.getId());
-        String planInputVariable = NodeParams.paramString(node, "planInputVariable");
-        if (planInputVariable == null || planInputVariable.isBlank()) planInputVariable = "__planner_result";
-        log.info("PLANNER step 2 | nodeId={} | mode={} | modelPluginRef={} | planInputVariable={}", node.getId(), interpretOnly ? "interpretOnly" : "model", modelPluginRef, planInputVariable);
-
-        String planResultJson;
-        if (!interpretOnly) {
-            log.info("PLANNER step 3a | nodeId={} | resolving template and userQuery", node.getId());
-            String resultVariable = NodeParams.paramString(node, "resultVariable");
-            if (resultVariable == null || resultVariable.isBlank()) resultVariable = "__planner_result";
-            String userQueryVariable = NodeParams.paramString(node, "userQueryVariable");
-            if (userQueryVariable == null || userQueryVariable.isBlank()) userQueryVariable = "userQuery";
-            String promptVar = "__planner_prompt";
-            String template = PromptTemplateProvider.getTemplate(queueName);
-            if (template == null || template.isBlank()) template = PromptTemplateProvider.getTemplate("default");
-            if (template == null || template.isBlank()) {
-                log.warn("PLANNER node {}: no template for queue {} or default", node.getId(), queueName);
-                return null;
-            }
-            Object userQueryObj = variableEngine.get(userQueryVariable);
-            String userQuery = userQueryObj != null ? userQueryObj.toString() : "";
-            String filledPrompt = template.replace(PlannerContract.USER_QUERY_PLACEHOLDER, userQuery);
-            variableEngine.put(promptVar, filledPrompt);
-            if (log.isInfoEnabled()) {
-                int maxLog = 400;
-                String promptSnippet = filledPrompt.length() > maxLog ? filledPrompt.substring(0, maxLog) + "...[truncated]" : filledPrompt;
-                log.info("PLANNER step 3b | nodeId={} | invoking model | pluginRef={} | userQuery length={} | filledPrompt length={} | snippet={}", node.getId(), modelPluginRef, userQuery.length(), filledPrompt.length(), promptSnippet);
-            }
-            Map<String, String> inputVarToParam = new LinkedHashMap<>();
-            inputVarToParam.put(promptVar, "prompt");
-            Map<String, String> outputParamToVar = new LinkedHashMap<>();
-            outputParamToVar.put("responseText", resultVariable);
-            pluginInvoker.invokeWithVariableMapping(modelPluginRef, inputVarToParam, outputParamToVar, variableEngine);
-            Object planResultObj = variableEngine.get(resultVariable);
-            planResultJson = planResultObj != null ? planResultObj.toString() : "";
-            log.info("PLANNER step 3c | nodeId={} | model returned | result length={}", node.getId(), planResultJson != null ? planResultJson.length() : 0);
-        } else {
-            log.info("PLANNER step 3d | nodeId={} | reading plan from variable {}", node.getId(), planInputVariable);
-            Object planResultObj = variableEngine.get(planInputVariable);
-            planResultJson = planResultObj != null ? planResultObj.toString() : "";
-        }
-
-        int planInputLen = planResultJson != null ? planResultJson.length() : 0;
-        String planInputSnippet = planResultJson != null && planResultJson.length() > 500
-                ? planResultJson.substring(0, 500) + "...[truncated]"
-                : (planResultJson != null ? planResultJson : "");
-        log.info("PLANNER step 4 | nodeId={} | plan input | length={} | snippet={}", node.getId(), planInputLen, planInputSnippet);
-
-        if (subtreeCreatorPluginRef != null && !subtreeCreatorPluginRef.isBlank()) {
-            log.info("PLANNER step 5a | nodeId={} | using subtreeCreatorPluginRef={}", node.getId(), subtreeCreatorPluginRef);
-            Map<String, Object> creatorInput = Map.of("planText", planResultJson != null ? planResultJson : "");
-            Map<String, Object> creatorOutput = pluginInvoker.invokeWithInputMap(subtreeCreatorPluginRef, creatorInput);
-            @SuppressWarnings("unchecked")
-            Map<String, Object> variablesToInject = (Map<String, Object>) creatorOutput.get("variablesToInject");
-            @SuppressWarnings("unchecked")
-            List<Map<String, Object>> steps = (List<Map<String, Object>>) creatorOutput.get("steps");
-            if (variablesToInject != null) {
-                for (Map.Entry<String, Object> e : variablesToInject.entrySet()) {
-                    variableEngine.put(e.getKey(), e.getValue());
-                }
-            }
-            if (steps != null && !steps.isEmpty()) {
-                for (int i = 0; i < steps.size(); i++) {
-                    Map<String, Object> step = steps.get(i);
-                    if (step != null && step.containsKey("prompt")) {
-                        variableEngine.put("__planner_step_" + i + "_prompt", step.get("prompt"));
-                    }
-                }
-                PipelineFeatureContextImpl featureContext = new PipelineFeatureContextImpl(pipeline.getScope(), queueName);
-                List<NodeSpec> specs = nodeSpecsFromCreatorSteps(steps);
-                DynamicNodeFactory factory = new DynamicNodeFactoryImpl(tree, featureContext, nodeFeatureEnricher, expansionLimits, expansionState);
-                factory.expand(new DynamicNodeExpansionRequest(node.getId(), specs));
-                log.info("PLANNER step 6a | nodeId={} | expand from creator | count={} | stepRefs={}", node.getId(), specs.size(),
-                        specs.stream().map(NodeSpec::pluginRef).filter(Objects::nonNull).toList());
-            }
-            log.info("PLANNER step 8a | nodeId={} | exit (subtreeCreator path)", node.getId());
-            return null;
-        }
-
-        log.info("PLANNER step 5b | nodeId={} | using parser (no subtreeCreator)", node.getId());
-        SubtreeBuilder builder = SubtreeBuilderRegistry.get(parserName);
-        if (builder == null) {
-            log.warn("PLANNER node {}: no parser for '{}'", node.getId(), parserName);
-            return null;
-        }
-        PipelineFeatureContextImpl featureContext = new PipelineFeatureContextImpl(pipeline.getScope(), queueName);
-        DynamicNodeFactory factory = new DynamicNodeFactoryImpl(tree, featureContext, nodeFeatureEnricher, expansionLimits, expansionState);
-        log.info("PLANNER step 6b | nodeId={} | parser={} | calling builder.buildExpansion", node.getId(), parserName);
-        SubtreeBuilder.ExpansionBuildResult expansionResult = builder.buildExpansion(planResultJson, node.getId());
-        List<NodeSpec> requestedSpecs = expansionResult.expansionRequest().children();
-        if (requestedSpecs == null || requestedSpecs.isEmpty()) {
-            log.warn("Planner could not add tree: parser returned no steps. nodeId={} | planLength={} | Check model output is a JSON array of objects with \"toolId\" and \"input\". Example: [{\"toolId\":\"ECHO_TOOL\",\"input\":{\"prompt\":\"...\"}}]",
-                    node.getId(), planResultJson != null ? planResultJson.length() : 0);
-        }
-        for (Map.Entry<String, Object> e : expansionResult.variablesToInject().entrySet()) {
-            variableEngine.put(e.getKey(), e.getValue());
-        }
-        ExpansionResult expanded = factory.expand(expansionResult.expansionRequest());
-        if (!expanded.expandedNodes().isEmpty()) {
-            log.info("PLANNER step 7b | nodeId={} | expand done | parser={} | stepsCount={} | stepRefs={}", node.getId(), parserName, expanded.expandedNodes().size(),
-                    expanded.expandedNodes().stream().map(ExpandedNode::pluginRef).filter(Objects::nonNull).toList());
-        } else {
-            log.warn("PLANNER could not add tree: no nodes attached. nodeId={} | parser={} | requestedSpecsCount={} (possible causes: planner already expanded, expansion limits hit, or parser returned no valid steps)",
-                    node.getId(), parserName, requestedSpecs != null ? requestedSpecs.size() : 0);
-        }
-        log.info("PLANNER step 9 | nodeId={} | exit", node.getId());
-        return null;
-    }
-
     /**
      * Runs planner logic only (model + parse + inject variables). Returns the list of step nodes
      * without attaching to any tree. Used when each step should run as a separate Temporal activity.
      */
     public List<ExecutionTreeNode> runPlannerReturnSteps(ExecutionTreeNode node, PipelineDefinition pipeline,
                                                          VariableEngine variableEngine, String queueName) {
-        String planInputVariable = NodeParams.paramString(node, "planInputVariable");
-        if (planInputVariable == null || planInputVariable.isBlank()) planInputVariable = "__planner_result";
-        String modelPluginRef = NodeParams.paramString(node, "modelPluginRef");
-        boolean interpretOnly = (modelPluginRef == null || modelPluginRef.isBlank());
-
-        String planResultJson;
-        if (!interpretOnly) {
-            String resultVariable = NodeParams.paramString(node, "resultVariable");
-            if (resultVariable == null || resultVariable.isBlank()) resultVariable = "__planner_result";
-            String userQueryVariable = NodeParams.paramString(node, "userQueryVariable");
-            if (userQueryVariable == null || userQueryVariable.isBlank()) userQueryVariable = "userQuery";
-            String promptVar = "__planner_prompt";
-            String template = PromptTemplateProvider.getTemplate(queueName);
-            if (template == null || template.isBlank()) template = PromptTemplateProvider.getTemplate("default");
-            if (template == null || template.isBlank()) {
-                log.warn("PLANNER node {}: no template for queue {} or default", node.getId(), queueName);
-                return List.of();
-            }
-            Object userQueryObj = variableEngine.get(userQueryVariable);
-            String userQuery = userQueryObj != null ? userQueryObj.toString() : "";
-            String filledPrompt = template.replace(PlannerContract.USER_QUERY_PLACEHOLDER, userQuery);
-            variableEngine.put(promptVar, filledPrompt);
-            Map<String, String> inputVarToParam = new LinkedHashMap<>();
-            inputVarToParam.put(promptVar, "prompt");
-            Map<String, String> outputParamToVar = new LinkedHashMap<>();
-            outputParamToVar.put("responseText", resultVariable);
-            pluginInvoker.invokeWithVariableMapping(modelPluginRef, inputVarToParam, outputParamToVar, variableEngine);
-            Object planResultObj = variableEngine.get(resultVariable);
-            planResultJson = planResultObj != null ? planResultObj.toString() : "";
-        } else {
-            Object planResultObj = variableEngine.get(planInputVariable);
-            planResultJson = planResultObj != null ? planResultObj.toString() : "";
-        }
-
-        String subtreeCreatorPluginRef = NodeParams.paramString(node, "subtreeCreatorPluginRef");
-        if (subtreeCreatorPluginRef != null && !subtreeCreatorPluginRef.isBlank()) {
-            Map<String, Object> creatorInput = Map.of("planText", planResultJson != null ? planResultJson : "");
-            Map<String, Object> creatorOutput = pluginInvoker.invokeWithInputMap(subtreeCreatorPluginRef, creatorInput);
-            @SuppressWarnings("unchecked")
-            Map<String, Object> variablesToInject = (Map<String, Object>) creatorOutput.get("variablesToInject");
-            @SuppressWarnings("unchecked")
-            List<Map<String, Object>> steps = (List<Map<String, Object>>) creatorOutput.get("steps");
-            if (variablesToInject != null) {
-                for (Map.Entry<String, Object> e : variablesToInject.entrySet()) {
-                    variableEngine.put(e.getKey(), e.getValue());
-                }
-            }
-            if (steps != null && !steps.isEmpty()) {
-                for (int i = 0; i < steps.size(); i++) {
-                    Map<String, Object> step = steps.get(i);
-                    if (step != null && step.containsKey("prompt")) {
-                        variableEngine.put("__planner_step_" + i + "_prompt", step.get("prompt"));
-                    }
-                }
-                return buildNodesFromCreatorSteps(steps, new PipelineFeatureContextImpl(pipeline.getScope(), queueName));
-            }
-            return List.of();
-        }
-
-        String parserName = NodeParams.paramString(node, "parser");
-        if (parserName == null || parserName.isBlank()) parserName = NodeParams.paramString(node, "treeBuilder");
-        if (parserName == null || parserName.isBlank()) parserName = "default";
-        SubtreeBuilder builder = SubtreeBuilderRegistry.get(parserName);
-        if (builder == null) {
-            log.warn("PLANNER node {}: no parser for '{}'", node.getId(), parserName);
-            return List.of();
-        }
-        PipelineFeatureContextImpl featureContext = new PipelineFeatureContextImpl(pipeline.getScope(), queueName);
-        SubtreeBuilder.BuildResult buildResult = dynamicNodeBuilder != null
-                ? builder.build(planResultJson, dynamicNodeBuilder, featureContext)
-                : builder.build(planResultJson);
-        for (Map.Entry<String, Object> e : buildResult.variablesToInject().entrySet()) {
-            variableEngine.put(e.getKey(), e.getValue());
-        }
-        if (dynamicNodeBuilder != null) {
-            return buildResult.nodes();
-        }
-        return buildResult.nodes().stream()
-                .map(n -> nodeFeatureEnricher.enrich(n, featureContext))
-                .toList();
+        return plannerHandler.runPlannerReturnSteps(node, pipeline, variableEngine, queueName, handlerContext);
     }
 
     private Object executeSequence(ExecutionTreeNode node, PipelineDefinition pipeline,
@@ -498,18 +281,20 @@ public final class NodeExecutionDispatcher {
                                ChildNodeRunner runChild, ChildNodeRunner runChildSync) {
         List<ExecutionTreeNode> children = node.getChildren();
         if (children.isEmpty()) return null;
-        boolean runParallel = executionType == ExecutionType.ASYNC && executor != null && children.size() > 1;
+        boolean runParallel = handlerContext.getExecutionType() == ExecutionType.ASYNC && handlerContext.getExecutor() != null && children.size() > 1;
         if (runParallel) {
             List<Future<?>> futures = new ArrayList<>(children.size());
+            String runId = handlerContext.getLedgerRunId();
+            var executor = handlerContext.getExecutor();
             for (ExecutionTreeNode child : children) {
                 Future<?> future = executor.submit(() -> {
-                    if (ledgerRunId != null && !ledgerRunId.isBlank()) {
-                        LedgerContext.setRunId(ledgerRunId);
+                    if (runId != null && !runId.isBlank()) {
+                        LedgerContext.setRunId(runId);
                     }
                     try {
                         runChildSync.run(child, pipeline, variableEngine, queueName);
                     } finally {
-                        if (ledgerRunId != null && !ledgerRunId.isBlank()) {
+                        if (runId != null && !runId.isBlank()) {
                             LedgerContext.clear();
                         }
                     }
@@ -559,7 +344,7 @@ public final class NodeExecutionDispatcher {
                     runChild.run(child, pipeline, variableEngine, queueName);
                 }
                 if (node.getPluginRef() != null && !node.getPluginRef().isBlank()) {
-                    return pluginInvoker.invoke(node, variableEngine);
+                    return handlerContext.getPluginInvoker().invoke(node, variableEngine);
                 }
                 break;
             case "ALL":
@@ -642,7 +427,7 @@ public final class NodeExecutionDispatcher {
 
     private Object executeSubPipeline(ExecutionTreeNode node, PipelineDefinition pipeline,
                                      VariableEngine variableEngine, String queueName, ChildNodeRunner runChild) {
-        if (config == null || config.getPipelines() == null) {
+        if (handlerContext.getConfig() == null || handlerContext.getConfig().getPipelines() == null) {
             log.warn("SUB_PIPELINE node {} has no PipelineConfiguration; skipping", node.getId());
             return null;
         }
@@ -651,7 +436,7 @@ public final class NodeExecutionDispatcher {
             log.warn("SUB_PIPELINE node {} missing pipelineRef in params", node.getId());
             return null;
         }
-        PipelineDefinition subPipeline = config.getPipelines().get(pipelineRef);
+        PipelineDefinition subPipeline = handlerContext.getConfig().getPipelines().get(pipelineRef);
         if (subPipeline == null) {
             log.warn("SUB_PIPELINE node {} pipelineRef '{}' not found in config", node.getId(), pipelineRef);
             return null;
@@ -687,7 +472,7 @@ public final class NodeExecutionDispatcher {
         inputVarToParam.put(promptVar, "prompt");
         Map<String, String> outputParamToVar = new LinkedHashMap<>();
         outputParamToVar.put("responseText", outputVar);
-        return pluginInvoker.invokeWithVariableMapping(pluginRef, inputVarToParam, outputParamToVar, variableEngine);
+        return handlerContext.getPluginInvoker().invokeWithVariableMapping(pluginRef, inputVarToParam, outputParamToVar, variableEngine);
     }
 
     private Object executeToolRouter(ExecutionTreeNode node, PipelineDefinition pipeline,
@@ -727,7 +512,7 @@ public final class NodeExecutionDispatcher {
         Map<String, String> outputParamToVar = new LinkedHashMap<>();
         outputParamToVar.put("result", outputVar);
         outputParamToVar.put("score", outputVar);
-        return pluginInvoker.invokeWithVariableMapping(evaluatorRef, inputVarToParam, outputParamToVar, variableEngine);
+        return handlerContext.getPluginInvoker().invokeWithVariableMapping(evaluatorRef, inputVarToParam, outputParamToVar, variableEngine);
     }
 
     private Object executeReflection(ExecutionTreeNode node, VariableEngine variableEngine) {
@@ -742,61 +527,7 @@ public final class NodeExecutionDispatcher {
         inputVarToParam.put(inputVar, "prompt");
         Map<String, String> outputParamToVar = new LinkedHashMap<>();
         outputParamToVar.put("responseText", outputVar);
-        return pluginInvoker.invokeWithVariableMapping(pluginRef, inputVarToParam, outputParamToVar, variableEngine);
-    }
-
-    /**
-     * Builds semantic child specs from SUBTREE_CREATOR plugin output. Used for expansion path
-     * (worker creates nodes via DynamicNodeFactory.expand).
-     */
-    private List<NodeSpec> nodeSpecsFromCreatorSteps(List<Map<String, Object>> steps) {
-        List<NodeSpec> specs = new ArrayList<>();
-        for (int i = 0; i < steps.size(); i++) {
-            Map<String, Object> step = steps.get(i);
-            String pluginRef = step != null && step.get("pluginRef") != null ? step.get("pluginRef").toString().trim() : null;
-            if (pluginRef == null || pluginRef.isBlank()) continue;
-            String promptVar = "__planner_step_" + i + "_prompt";
-            String responseVar = "__planner_step_" + i + "_response";
-            List<ParameterMapping> inputMappings = List.of(new ParameterMapping("prompt", promptVar));
-            List<ParameterMapping> outputMappings = List.of(new ParameterMapping("responseText", responseVar));
-            specs.add(NodeSpec.plugin("step-" + i + "-" + pluginRef, pluginRef, inputMappings, outputMappings));
-        }
-        return specs;
-    }
-
-    /**
-     * Builds execution tree nodes from SUBTREE_CREATOR plugin output. Each step is a map with "pluginRef" and "prompt".
-     * Enriches each node with pipeline and queue-based features via the injected enricher.
-     * Used by runPlannerReturnSteps (returns nodes without attaching to tree).
-     */
-    private List<ExecutionTreeNode> buildNodesFromCreatorSteps(List<Map<String, Object>> steps,
-                                                               PipelineFeatureContextImpl featureContext) {
-        List<String> emptyStrList = List.of();
-        List<ExecutionTreeNode> nodes = new ArrayList<>();
-        for (int i = 0; i < steps.size(); i++) {
-            Map<String, Object> step = steps.get(i);
-            String pluginRef = step != null && step.get("pluginRef") != null ? step.get("pluginRef").toString().trim() : null;
-            if (pluginRef == null || pluginRef.isBlank()) continue;
-            String promptVar = "__planner_step_" + i + "_prompt";
-            String responseVar = "__planner_step_" + i + "_response";
-            List<ParameterMapping> inputMappings = List.of(new ParameterMapping("prompt", promptVar));
-            List<ParameterMapping> outputMappings = List.of(new ParameterMapping("responseText", responseVar));
-            ExecutionTreeNode child = new ExecutionTreeNode(
-                    java.util.UUID.randomUUID().toString(),
-                    "step-" + i + "-" + pluginRef,
-                    NodeType.PLUGIN,
-                    List.of(),
-                    "PLUGIN",
-                    pluginRef,
-                    inputMappings,
-                    outputMappings,
-                    emptyStrList, emptyStrList, emptyStrList, emptyStrList, emptyStrList, emptyStrList, emptyStrList, emptyStrList,
-                    Map.of(),
-                    null, null, null
-            );
-            nodes.add(nodeFeatureEnricher.enrich(child, featureContext));
-        }
-        return nodes;
+        return handlerContext.getPluginInvoker().invokeWithVariableMapping(pluginRef, inputVarToParam, outputParamToVar, variableEngine);
     }
 
     /**
