@@ -96,7 +96,21 @@ final class WorkflowVariableMapHelper {
             promises.add(p);
         }
         if (promises.isEmpty()) return variableMapJson;
-        Promise.allOf(promises).get();
+        try {
+            Promise.allOf(promises).get();
+        } catch (Throwable firstFailure) {
+            // Wait for all parallel activities to report to Temporal before propagating failure.
+            // Otherwise the workflow may complete (e.g. fallback) while other activities are still
+            // running; when they report completion they get NOT_FOUND: workflow execution already completed.
+            for (Promise<String> p : promises) {
+                try {
+                    p.get();
+                } catch (Throwable ignored) {
+                    // Already failed or will fail; we only need them to finish and report.
+                }
+            }
+            throw firstFailure;
+        }
         List<String> results = new ArrayList<>();
         for (Promise<String> p : promises) {
             String r = p.get();

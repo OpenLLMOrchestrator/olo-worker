@@ -8,7 +8,7 @@ import java.util.Objects;
 
 /**
  * Tenant, roles, permissions, session, and execution context for the workflow.
- * runId and callbackBaseUrl are set by the backend when starting the workflow (single-argument start).
+ * runId, callbackBaseUrl, and correlationId are set by the backend when starting the workflow.
  */
 public final class Context {
 
@@ -19,6 +19,7 @@ public final class Context {
     private final String sessionId;
     private final String runId;
     private final String callbackBaseUrl;
+    private final String correlationId;
 
     @JsonCreator
     public Context(
@@ -28,7 +29,8 @@ public final class Context {
             @JsonProperty("permissions") List<String> permissions,
             @JsonProperty("sessionId") String sessionId,
             @JsonProperty("runId") String runId,
-            @JsonProperty("callbackBaseUrl") String callbackBaseUrl) {
+            @JsonProperty("callbackBaseUrl") String callbackBaseUrl,
+            @JsonProperty("correlationId") String correlationId) {
         this.tenantId = tenantId;
         this.groupId = groupId;
         this.roles = roles != null ? List.copyOf(roles) : List.of();
@@ -36,11 +38,12 @@ public final class Context {
         this.sessionId = sessionId;
         this.runId = runId != null ? runId : "";
         this.callbackBaseUrl = callbackBaseUrl != null ? callbackBaseUrl : "";
+        this.correlationId = correlationId != null ? correlationId : "";
     }
 
-    /** Convenience constructor without runId/callbackBaseUrl (e.g. for producer examples). */
+    /** Convenience constructor without runId/callbackBaseUrl/correlationId (e.g. for producer examples). */
     public Context(String tenantId, String groupId, List<String> roles, List<String> permissions, String sessionId) {
-        this(tenantId, groupId, roles, permissions, sessionId, null, null);
+        this(tenantId, groupId, roles, permissions, sessionId, null, null, null);
     }
 
     public String getTenantId() {
@@ -71,6 +74,10 @@ public final class Context {
         return callbackBaseUrl;
     }
 
+    public String getCorrelationId() {
+        return correlationId;
+    }
+
     @Override
     public boolean equals(Object o) {
         if (this == o) return true;
@@ -82,11 +89,12 @@ public final class Context {
                 && Objects.equals(permissions, context.permissions)
                 && Objects.equals(sessionId, context.sessionId)
                 && Objects.equals(runId, context.runId)
-                && Objects.equals(callbackBaseUrl, context.callbackBaseUrl);
+                && Objects.equals(callbackBaseUrl, context.callbackBaseUrl)
+                && Objects.equals(correlationId, context.correlationId);
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(tenantId, groupId, roles, permissions, sessionId, runId, callbackBaseUrl);
+        return Objects.hash(tenantId, groupId, roles, permissions, sessionId, runId, callbackBaseUrl, correlationId);
     }
 }

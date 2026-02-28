@@ -9,7 +9,7 @@ class WorkflowInputTest {
 
     private static final String SAMPLE_JSON = """
             {
-              "version": "2.0",
+              "version": "1.0",
               "inputs": [
                 {
                   "name": "input1",
@@ -68,7 +68,7 @@ class WorkflowInputTest {
     void fromJson_parsesSample() {
         WorkflowInput input = WorkflowInput.fromJson(SAMPLE_JSON);
 
-        assertEquals("2.0", input.getVersion());
+        assertEquals("1.0", input.getVersion());
         assertEquals(3, input.getInputs().size());
 
         InputItem i1 = input.getInputs().get(0);

@@ -5,11 +5,9 @@ import com.fasterxml.jackson.annotation.JsonProperty;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.SerializationFeature;
-import com.fasterxml.jackson.databind.module.SimpleModule;
 
 import java.io.IOException;
 import java.io.UncheckedIOException;
-import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
 
@@ -17,19 +15,13 @@ import java.util.Objects;
  * Root workflow input: version, inputs, context, routing, metadata.
  * Supports JSON serialization/deserialization and a fluent builder.
  * Can be deserialized from a JSON object or from a string containing JSON (e.g. Temporal payload).
- * {@link WorkflowInputDeserializer} is registered so both object and string payloads are handled.
+ * When the payload is a string (Temporal sends workflow arg as one string), Jackson uses the
+ * static String-argument creator so any worker's ObjectMapper can deserialize without a custom deserializer.
  */
 public final class WorkflowInput {
 
-    private static final ObjectMapper MAPPER = createMapper();
-
-    private static ObjectMapper createMapper() {
-        ObjectMapper mapper = new ObjectMapper().enable(SerializationFeature.INDENT_OUTPUT);
-        SimpleModule module = new SimpleModule();
-        module.addDeserializer(WorkflowInput.class, new WorkflowInputDeserializer());
-        mapper.registerModule(module);
-        return mapper;
-    }
+    private static final ObjectMapper MAPPER = new ObjectMapper()
+            .enable(SerializationFeature.INDENT_OUTPUT);
 
     private final String version;
     private final List<InputItem> inputs;
@@ -119,8 +111,8 @@ public final class WorkflowInput {
         }
     }
 
-    public static Builder builder() {
-        return new Builder();
+    public static WorkflowInputBuilder builder() {
+        return new WorkflowInputBuilder();
     }
 
     @Override
@@ -138,56 +130,5 @@ public final class WorkflowInput {
     @Override
     public int hashCode() {
         return Objects.hash(version, inputs, context, routing, metadata);
-    }
-
-    public static final class Builder {
-        private String version;
-        private final List<InputItem> inputs = new ArrayList<>();
-        private Context context;
-        private Routing routing;
-        private Metadata metadata;
-
-        public Builder version(String version) {
-            this.version = version;
-            return this;
-        }
-
-        public Builder addInput(InputItem input) {
-            this.inputs.add(Objects.requireNonNull(input, "input"));
-            return this;
-        }
-
-        public Builder inputs(List<InputItem> inputs) {
-            this.inputs.clear();
-            if (inputs != null) {
-                this.inputs.addAll(inputs);
-            }
-            return this;
-        }
-
-        public Builder context(Context context) {
-            this.context = context;
-            return this;
-        }
-
-        public Builder routing(Routing routing) {
-            this.routing = routing;
-            return this;
-        }
-
-        public Builder metadata(Metadata metadata) {
-            this.metadata = metadata;
-            return this;
-        }
-
-        public WorkflowInput build() {
-            return new WorkflowInput(
-                    version,
-                    List.copyOf(inputs),
-                    context,
-                    routing,
-                    metadata
-            );
-        }
     }
 }

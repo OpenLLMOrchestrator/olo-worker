@@ -6,7 +6,7 @@
 
 | Package | Responsibility | Main types |
 |---------|-----------------|------------|
-| **`com.olo.input.model`** | Payload DTOs and enums; JSON (de)serialization | `WorkflowInput`, `InputItem`, `Storage`, `Context`, `Routing`, `Metadata`, `InputType`, `StorageMode`, `CacheProvider`, `TransactionType` |
+| **`com.olo.input.model`** | Payload DTOs and enums; JSON (de)serialization; fluent builder | `WorkflowInput`, `WorkflowInputBuilder` (use `WorkflowInput.builder()`), `InputItem`, `Storage`, `Context`, `Routing`, `Metadata`, `InputType`, `StorageMode`, `CacheProvider`, `TransactionType` |
 | **`com.olo.input.consumer`** | Read-only contract and resolution | `WorkflowInputValues`, `DefaultWorkflowInputValues`, `CacheReader`, `FileReader` |
 | **`com.olo.input.producer`** | Building payloads and writing to cache | `WorkflowInputProducer`, `CacheWriter`, `InputStorageKeys` |
 | **`com.olo.input.config`** | Configuration from environment | `MaxLocalMessageSize` |
@@ -63,7 +63,7 @@ CacheWriter cacheWriter = new RedisCacheWriter(redis);
 String transactionId = "8huqpd42mizzgjOhJEH9C";
 
 WorkflowInput input = WorkflowInputProducer
-    .create(maxLocal, cacheWriter, transactionId, "2.0")
+    .create(maxLocal, cacheWriter, transactionId, "1.0")
     .context(new Context("", "", List.of("PUBLIC", "ADMIN"), List.of("STORAGE", "CACHE", "S3"), "<UUID>"))
     .routing(new Routing("chat-queue-ollama", TransactionType.QUESTION_ANSWER, transactionId))
     .metadata(new Metadata(null, System.currentTimeMillis()))

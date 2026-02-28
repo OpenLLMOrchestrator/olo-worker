@@ -47,7 +47,7 @@ public final class WorkflowInputProducer {
     public static WorkflowInputProducer create(int maxLocalMessageSize, CacheWriter cacheWriter, String transactionId, String version) {
         Objects.requireNonNull(cacheWriter, "cacheWriter");
         Objects.requireNonNull(transactionId, "transactionId");
-        return new WorkflowInputProducer(maxLocalMessageSize, cacheWriter, transactionId, version != null ? version : "2.0");
+        return new WorkflowInputProducer(maxLocalMessageSize, cacheWriter, transactionId, version != null ? version : "1.0");
     }
 
     public WorkflowInputProducer context(Context context) {
