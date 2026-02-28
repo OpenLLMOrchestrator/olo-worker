@@ -1,4 +1,4 @@
-package com.olo.worker.activity;
+package com.olo.worker.activity.impl;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.olo.config.OloConfig;
@@ -6,10 +6,11 @@ import com.olo.config.OloSessionCache;
 import com.olo.input.model.WorkflowInput;
 import com.olo.node.DynamicNodeBuilder;
 import com.olo.node.NodeFeatureEnricher;
-import com.olo.worker.activity.node.NodeExecutionService;
-import com.olo.worker.activity.plan.ExecutionPlanService;
-import com.olo.worker.activity.plugin.PluginExecutionService;
-import com.olo.worker.activity.tree.TreeRunService;
+import com.olo.worker.activity.OloKernelActivities;
+import com.olo.worker.activity.node.impl.NodeExecutionService;
+import com.olo.worker.activity.plan.impl.ExecutionPlanService;
+import com.olo.worker.activity.plugin.impl.PluginExecutionService;
+import com.olo.worker.activity.tree.impl.TreeRunService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -17,10 +18,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
-/**
- * OLO Kernel activity implementation. Thin facade that delegates to dedicated services:
- * session/input, plugin execution, execution plan, single-node execution, and tree execution.
- */
+/** OLO Kernel activity implementation. Delegates to plan, plugin, node, and tree services. */
 public class OloKernelActivitiesImpl implements OloKernelActivities {
 
     private static final Logger log = LoggerFactory.getLogger(OloKernelActivitiesImpl.class);
@@ -51,8 +49,7 @@ public class OloKernelActivitiesImpl implements OloKernelActivities {
         sessionCache.cacheUpdate(input);
         String transactionId = input.getRouting() != null ? input.getRouting().getTransactionId() : null;
         String pipeline = input.getRouting() != null ? input.getRouting().getPipeline() : null;
-        String transactionType = input.getRouting() != null && input.getRouting().getTransactionType() != null
-                ? input.getRouting().getTransactionType().name() : null;
+        String transactionType = input.getRouting() != null && input.getRouting().getTransactionType() != null ? input.getRouting().getTransactionType().name() : null;
         String configVersion = input.getRouting() != null ? input.getRouting().getConfigVersion() : null;
         String tenantId = input.getContext() != null ? input.getContext().getTenantId() : null;
         String sessionId = input.getContext() != null ? input.getContext().getSessionId() : null;
@@ -94,9 +91,7 @@ public class OloKernelActivitiesImpl implements OloKernelActivities {
         payload.put("variableMapJson", variableMapJson);
         payload.put("queueName", queueName != null ? queueName : "");
         payload.put("workflowInputJson", workflowInputJson);
-        if (dynamicStepsJson != null && !dynamicStepsJson.isBlank()) {
-            payload.put("dynamicStepsJson", dynamicStepsJson);
-        }
+        if (dynamicStepsJson != null && !dynamicStepsJson.isBlank()) payload.put("dynamicStepsJson", dynamicStepsJson);
         try {
             return nodeExecutionService.executeNode(MAPPER.writeValueAsString(payload));
         } catch (Exception e) {

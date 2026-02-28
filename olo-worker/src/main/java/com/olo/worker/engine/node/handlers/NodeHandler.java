@@ -2,15 +2,20 @@ package com.olo.worker.engine.node.handlers;
 
 import com.olo.executiontree.config.PipelineDefinition;
 import com.olo.executiontree.tree.ExecutionTreeNode;
+import com.olo.executiontree.tree.NodeType;
 import com.olo.worker.engine.VariableEngine;
 import com.olo.worker.engine.node.ChildNodeRunner;
 
+import java.util.Set;
 import java.util.function.Consumer;
 
 /**
  * Single responsibility: handle execution for one or more node types (dispatch or tree-driven).
  */
 public interface NodeHandler {
+
+    /** Node types this handler supports. */
+    Set<NodeType> supportedTypes();
 
     /**
      * Handle in recursive dispatch mode (runChild/runChildSync). Return null for "no result".

@@ -1,4 +1,4 @@
-package com.olo.worker.activity.plugin;
+package com.olo.worker.activity.plugin.impl;
 
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;

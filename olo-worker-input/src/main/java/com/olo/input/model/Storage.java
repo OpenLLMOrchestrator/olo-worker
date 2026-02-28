@@ -1,13 +1,16 @@
 package com.olo.input.model;
 
 import com.fasterxml.jackson.annotation.JsonCreator;
+import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.annotation.JsonProperty;
 
 import java.util.Objects;
 
 /**
  * Where and how an input value is stored (LOCAL, CACHE, S3, DB).
+ * Null cache/file are omitted from JSON so storage can be {"mode":"LOCAL"} only.
  */
+@JsonInclude(JsonInclude.Include.NON_NULL)
 public final class Storage {
 
     private final StorageMode mode;

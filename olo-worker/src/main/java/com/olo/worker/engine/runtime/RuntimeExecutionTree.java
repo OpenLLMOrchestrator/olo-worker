@@ -4,9 +4,7 @@ import com.olo.executiontree.tree.ExecutionTreeNode;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.util.ArrayDeque;
 import java.util.ArrayList;
-import java.util.Deque;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -14,13 +12,7 @@ import java.util.Map;
 import java.util.Set;
 
 /**
- * Mutable runtime tree: single source of truth for execution, debugger, and UI.
- * Built from static definition; planner adds nodes via {@link #attachChildren} only.
- * Dispatcher has no special case for planner — it just dispatches; expansion is inside planner execution.
- * <p>
- * For Temporal: this tree must be workflow-owned (in-memory for the run). If execution were split
- * across multiple activities, the tree would need to live in workflow state and be passed to/from activities
- * so the workflow "sees" new nodes. Currently the full loop runs inside one activity so the tree stays in memory.
+ * Mutable runtime tree for execution. Built from static definition; planner adds nodes via {@link #attachChildren}.
  */
 public final class RuntimeExecutionTree {
 
@@ -69,39 +61,9 @@ public final class RuntimeExecutionTree {
         return state != null ? state.getDefinition() : null;
     }
 
-    /** Attach planner-generated nodes as children of the given parent. No special handling in dispatcher. */
+    /** Attach planner-generated nodes as children of the given parent. */
     public void attachChildren(String parentNodeId, List<ExecutionTreeNode> definitions) {
-        if (parentNodeId == null || definitions == null || definitions.isEmpty()) {
-            if (log.isInfoEnabled() && parentNodeId != null) {
-                log.info("Tree attachChildren skip | parentId={} | definitions null or empty", parentNodeId);
-            }
-            return;
-        }
-        if (log.isInfoEnabled()) {
-            log.info("Tree attachChildren start | parentId={} | definitionsCount={}", parentNodeId, definitions.size());
-        }
-        RuntimeNodeState parent = nodesById.get(parentNodeId);
-        if (parent == null) {
-            if (log.isWarnEnabled()) log.warn("Tree attachChildren | parent not found | parentId={}", parentNodeId);
-            return;
-        }
-        List<String> addedIds = new ArrayList<>();
-        for (ExecutionTreeNode def : definitions) {
-            if (def == null) continue;
-            String id = def.getId();
-            if (nodesById.containsKey(id)) continue;
-            RuntimeNodeState state = new RuntimeNodeState(id, def, parentNodeId, true);
-            nodesById.put(id, state);
-            parent.addChildId(id);
-            addedIds.add(id);
-            if (log.isInfoEnabled()) {
-                log.info("Tree node created | nodeId={} | parentId={} | type={} | displayName={} | pluginRef={}",
-                        id, parentNodeId, def.getType(), def.getDisplayName(), def.getPluginRef());
-            }
-        }
-        if (!addedIds.isEmpty() && log.isInfoEnabled()) {
-            log.info("Tree attachChildren | parentId={} | added={} | childIds={}", parentNodeId, addedIds.size(), addedIds);
-        }
+        RuntimeTreeAttach.attach(nodesById, parentNodeId, definitions);
     }
 
     /**
@@ -123,64 +85,28 @@ public final class RuntimeExecutionTree {
     }
 
     public void markCompleted(String nodeId) {
-        if (log.isInfoEnabled()) {
-            log.info("Tree markCompleted | nodeId={}", nodeId);
-        }
-        RuntimeNodeState state = getNode(nodeId);
-        if (state != null) state.setStatus(NodeStatus.COMPLETED);
+        if (log.isInfoEnabled()) log.info("Tree markCompleted | nodeId={}", nodeId);
+        setStatus(nodeId, NodeStatus.COMPLETED);
     }
 
     public void markFailed(String nodeId) {
-        if (log.isInfoEnabled()) {
-            log.info("Tree markFailed | nodeId={}", nodeId);
-        }
-        RuntimeNodeState state = getNode(nodeId);
-        if (state != null) state.setStatus(NodeStatus.FAILED);
+        if (log.isInfoEnabled()) log.info("Tree markFailed | nodeId={}", nodeId);
+        setStatus(nodeId, NodeStatus.FAILED);
     }
 
     public void markSkipped(String nodeId) {
-        if (log.isInfoEnabled()) {
-            log.info("Tree markSkipped | nodeId={}", nodeId);
-        }
-        RuntimeNodeState state = getNode(nodeId);
-        if (state != null) state.setStatus(NodeStatus.SKIPPED);
+        if (log.isInfoEnabled()) log.info("Tree markSkipped | nodeId={}", nodeId);
+        setStatus(nodeId, NodeStatus.SKIPPED);
     }
 
-    /**
-     * Returns the next node to execute: NOT_STARTED, parent COMPLETED, deterministic DFS order.
-     * Returns null when no executable node remains.
-     */
+    private void setStatus(String nodeId, NodeStatus status) {
+        RuntimeNodeState state = getNode(nodeId);
+        if (state != null) state.setStatus(status);
+    }
+
+    /** Returns the next node to execute (NOT_STARTED, parent COMPLETED, DFS), or null when none. */
     public String findNextExecutable() {
-        if (rootId == null) {
-            if (log.isInfoEnabled()) log.info("Tree findNextExecutable | rootId null | return null");
-            return null;
-        }
-        Deque<String> stack = new ArrayDeque<>();
-        stack.push(rootId);
-        while (!stack.isEmpty()) {
-            String id = stack.pop();
-            RuntimeNodeState state = getNode(id);
-            if (state == null) continue;
-            if (state.getStatus() == NodeStatus.NOT_STARTED) {
-                if (state.getParentId() == null) {
-                    if (log.isInfoEnabled()) log.info("Tree findNextExecutable | found root | nodeId={}", id);
-                    return id;
-                }
-                RuntimeNodeState parent = getNode(state.getParentId());
-                if (parent != null && parent.getStatus() == NodeStatus.COMPLETED) {
-                    if (log.isInfoEnabled()) log.info("Tree findNextExecutable | found | nodeId={} | parentId={} completed", id, state.getParentId());
-                    return id;
-                }
-            }
-            if (state.getStatus() == NodeStatus.COMPLETED || state.getStatus() == NodeStatus.SKIPPED) {
-                List<String> childIds = state.getChildIds();
-                for (int i = childIds.size() - 1; i >= 0; i--) {
-                    stack.push(childIds.get(i));
-                }
-            }
-        }
-        if (log.isInfoEnabled()) log.info("Tree findNextExecutable | no executable node | return null");
-        return null;
+        return RuntimeTreeTraversal.findNextExecutable(rootId, nodesById);
     }
 
     /** True if nodeId is ancestorId or a descendant of ancestorId. */
@@ -211,22 +137,8 @@ public final class RuntimeExecutionTree {
         return nodesById.size();
     }
 
-    /**
-     * Depth of the node: root = 0, its children = 1, etc. (number of edges to root.)
-     * Returns 0 if nodeId is null or not found.
-     */
+    /** Depth of node: root = 0. Returns 0 if nodeId is null or not found. */
     public int getDepth(String nodeId) {
-        if (nodeId == null) return 0;
-        int depth = 0;
-        String current = nodeId;
-        while (current != null) {
-            RuntimeNodeState state = nodesById.get(current);
-            if (state == null) return 0;
-            String parent = state.getParentId();
-            if (parent == null) break;
-            depth++;
-            current = parent;
-        }
-        return depth;
+        return RuntimeTreeTraversal.getDepth(nodeId, nodesById);
     }
 }

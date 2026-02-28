@@ -7,7 +7,8 @@ import java.util.List;
 import java.util.Objects;
 
 /**
- * Tenant, roles, permissions and session context for the workflow.
+ * Tenant, roles, permissions, session, and execution context for the workflow.
+ * runId and callbackBaseUrl are set by the backend when starting the workflow (single-argument start).
  */
 public final class Context {
 
@@ -16,6 +17,8 @@ public final class Context {
     private final List<String> roles;
     private final List<String> permissions;
     private final String sessionId;
+    private final String runId;
+    private final String callbackBaseUrl;
 
     @JsonCreator
     public Context(
@@ -23,12 +26,21 @@ public final class Context {
             @JsonProperty("groupId") String groupId,
             @JsonProperty("roles") List<String> roles,
             @JsonProperty("permissions") List<String> permissions,
-            @JsonProperty("sessionId") String sessionId) {
+            @JsonProperty("sessionId") String sessionId,
+            @JsonProperty("runId") String runId,
+            @JsonProperty("callbackBaseUrl") String callbackBaseUrl) {
         this.tenantId = tenantId;
         this.groupId = groupId;
         this.roles = roles != null ? List.copyOf(roles) : List.of();
         this.permissions = permissions != null ? List.copyOf(permissions) : List.of();
         this.sessionId = sessionId;
+        this.runId = runId != null ? runId : "";
+        this.callbackBaseUrl = callbackBaseUrl != null ? callbackBaseUrl : "";
+    }
+
+    /** Convenience constructor without runId/callbackBaseUrl (e.g. for producer examples). */
+    public Context(String tenantId, String groupId, List<String> roles, List<String> permissions, String sessionId) {
+        this(tenantId, groupId, roles, permissions, sessionId, null, null);
     }
 
     public String getTenantId() {
@@ -51,6 +63,14 @@ public final class Context {
         return sessionId;
     }
 
+    public String getRunId() {
+        return runId;
+    }
+
+    public String getCallbackBaseUrl() {
+        return callbackBaseUrl;
+    }
+
     @Override
     public boolean equals(Object o) {
         if (this == o) return true;
@@ -60,11 +80,13 @@ public final class Context {
                 && Objects.equals(groupId, context.groupId)
                 && Objects.equals(roles, context.roles)
                 && Objects.equals(permissions, context.permissions)
-                && Objects.equals(sessionId, context.sessionId);
+                && Objects.equals(sessionId, context.sessionId)
+                && Objects.equals(runId, context.runId)
+                && Objects.equals(callbackBaseUrl, context.callbackBaseUrl);
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(tenantId, groupId, roles, permissions, sessionId);
+        return Objects.hash(tenantId, groupId, roles, permissions, sessionId, runId, callbackBaseUrl);
     }
 }

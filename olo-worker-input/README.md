@@ -1,6 +1,6 @@
 # olo-worker-input
 
-Workflow input model, serialization, and **consumer/producer abstraction** for OLO Temporal workflows.
+**olo-worker-input** is there to **serialize and deserialize** workflow input for OLO Temporal workflows. It provides the workflow input model (WorkflowInput, inputs, context, routing, metadata), JSON serialization/deserialization, and a consumer/producer abstraction for reading and building payloads.
 
 ## Package structure (by responsibility)
 

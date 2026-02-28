@@ -1,16 +1,11 @@
 package com.olo.worker.activity;
 
+import com.olo.worker.activity.impl.OloKernelActivitiesImpl;
 import io.temporal.activity.Activity;
 import io.temporal.activity.DynamicActivity;
 import io.temporal.common.converter.EncodedValues;
 
-/**
- * Handles per-node activity invocations so Temporal event history shows
- * the activity type as "NODETYPE" or "PLUGIN:pluginRef" (e.g. "PLUGIN:GPT4_EXECUTOR").
- * Activities are leaf nodes (no children) or feature-type nodes; internal nodes are not.
- * The workflow schedules each node via {@link io.temporal.workflow.ActivityStub#execute(String, Class, Object...)}
- * with the activity type as the first argument; tasks for unknown types are dispatched here.
- */
+/** Handles per-node activity invocations; tasks for unknown types are dispatched here. */
 public final class ExecuteNodeDynamicActivity implements DynamicActivity {
 
     private final OloKernelActivitiesImpl delegate;
