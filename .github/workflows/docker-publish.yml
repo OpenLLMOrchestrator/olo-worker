@@ -5,6 +5,9 @@
 #   DOCKERHUB_TOKEN   - Docker Hub access token (https://hub.docker.com/settings/security)
 #
 # Image on Docker Hub: docker.io/<DOCKERHUB_USERNAME>/olo-worker
+#
+# If you see "502" or "error writing layer blob: failed to parse error response 502", the registry
+# returned a transient error. Re-run the failed job (Actions → workflow run → Re-run failed jobs).
 name: Docker build and publish
 
 on:
