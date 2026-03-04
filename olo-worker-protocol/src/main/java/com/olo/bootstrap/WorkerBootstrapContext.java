@@ -20,6 +20,9 @@ public interface WorkerBootstrapContext extends BootstrapContext {
     /** Session cache. Concrete type: {@link com.olo.config.OloSessionCache}. */
     Object getSessionCache();
 
+    /** Execution event sink for chat UI (semantic steps). May be null. */
+    Object getExecutionEventSink();
+
     /**
      * Factory that creates {@link com.olo.plugin.PluginExecutor} for a tenant.
      * Implementation (e.g. from plugin module) uses PluginRegistry; worker uses only this contract.

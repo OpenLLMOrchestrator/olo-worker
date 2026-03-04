@@ -69,10 +69,12 @@ final class TreeContextResolver {
         PipelineDefinition pipeline = config.getPipelines().values().iterator().next();
         ExecutionTreeNode rootNode = pipeline.getExecutionTree();
         String transactionId = workflowInput.getRouting() != null ? workflowInput.getRouting().getTransactionId() : null;
-        log.info("OloKernel runExecutionTree | transactionId={} | pipelineName={} | queue={} | tenantId={} | rootNodeId={} | rootNodeType={} | configVersion={}",
-                transactionId, pipeline.getName(), effectiveQueue, tenantId, rootNode != null ? rootNode.getId() : null,
+        String contextRunId = workflowInput.getContext() != null && workflowInput.getContext().getRunId() != null
+                ? workflowInput.getContext().getRunId().trim() : null;
+        String runId = (contextRunId != null && !contextRunId.isBlank()) ? contextRunId : java.util.UUID.randomUUID().toString();
+        log.info("OloKernel runExecutionTree | transactionId={} | runId={} | pipelineName={} | queue={} | tenantId={} | rootNodeId={} | rootNodeType={} | configVersion={}",
+                transactionId, runId, pipeline.getName(), effectiveQueue, tenantId, rootNode != null ? rootNode.getId() : null,
                 rootNode != null && rootNode.getType() != null ? rootNode.getType().name() : null, snapshotVersionId);
-        String runId = java.util.UUID.randomUUID().toString();
         ExecutionConfigSnapshot snapshot = ExecutionConfigSnapshot.of(tenantId, effectiveQueue, config, snapshotVersionId, runId);
         Map<String, Object> inputValues = new LinkedHashMap<>();
         for (InputItem item : workflowInput.getInputs()) {

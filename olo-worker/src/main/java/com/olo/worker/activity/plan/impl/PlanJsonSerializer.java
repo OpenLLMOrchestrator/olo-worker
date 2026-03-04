@@ -21,11 +21,18 @@ final class PlanJsonSerializer {
     static String buildPlanJson(PlanContextResolver.ResolvedPlanContext ctx, String workflowInputJson,
                                 List<ExecutionPlanBuilder.PlanEntry> linearPlan,
                                 ExecutionPlanBuilder.PlanWithParallelResult parallelResult) throws Exception {
+        return buildPlanJson(ctx, workflowInputJson, linearPlan, parallelResult, null);
+    }
+
+    static String buildPlanJson(PlanContextResolver.ResolvedPlanContext ctx, String workflowInputJson,
+                                List<ExecutionPlanBuilder.PlanEntry> linearPlan,
+                                ExecutionPlanBuilder.PlanWithParallelResult parallelResult,
+                                String runIdFromContext) throws Exception {
         VariableEngine initialEngine = new VariableEngine(ctx.pipeline, ctx.inputValues);
         String initialVariableMapJson = MAPPER.writeValueAsString(initialEngine.getExportMap());
         Map<String, Object> out = new LinkedHashMap<>();
         out.put("linear", true);
-        out.put("runId", UUID.randomUUID().toString());
+        out.put("runId", (runIdFromContext != null && !runIdFromContext.isBlank()) ? runIdFromContext : UUID.randomUUID().toString());
         out.put("configJson", MAPPER.writeValueAsString(ctx.config));
         out.put("pipelineName", ctx.pipeline.getName());
         out.put("queueName", ctx.effectiveQueue);

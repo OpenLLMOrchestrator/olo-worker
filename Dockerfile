@@ -6,6 +6,9 @@ WORKDIR /build
 # Copy full project ( .dockerignore excludes build outputs and IDE files)
 COPY . .
 
+# Ensure gradlew is executable (COPY can drop execute bits)
+RUN chmod +x gradlew
+
 # Build the worker distribution (no daemon, skip tests for faster image build)
 RUN ./gradlew :olo-worker:installDist --no-daemon --no-build-cache -x test
 

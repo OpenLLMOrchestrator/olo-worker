@@ -28,6 +28,7 @@ public final class WorkerBootstrapContextImpl implements WorkerBootstrapContext 
     private final BootstrapContextImpl delegate;
     private final Object runLedger;
     private final Object sessionCache;
+    private final Object executionEventSink;
     private final PluginExecutorFactory pluginExecutorFactory;
     private final DynamicNodeBuilder dynamicNodeBuilder;
     private final NodeFeatureEnricherFactory nodeFeatureEnricherFactory;
@@ -36,9 +37,18 @@ public final class WorkerBootstrapContextImpl implements WorkerBootstrapContext 
                                        PluginExecutorFactory pluginExecutorFactory,
                                        DynamicNodeBuilder dynamicNodeBuilder,
                                        NodeFeatureEnricherFactory nodeFeatureEnricherFactory) {
+        this(delegate, runLedger, sessionCache, null, pluginExecutorFactory, dynamicNodeBuilder, nodeFeatureEnricherFactory);
+    }
+
+    public WorkerBootstrapContextImpl(BootstrapContextImpl delegate, Object runLedger, Object sessionCache,
+                                       Object executionEventSink,
+                                       PluginExecutorFactory pluginExecutorFactory,
+                                       DynamicNodeBuilder dynamicNodeBuilder,
+                                       NodeFeatureEnricherFactory nodeFeatureEnricherFactory) {
         this.delegate = Objects.requireNonNull(delegate, "delegate");
         this.runLedger = runLedger;
         this.sessionCache = Objects.requireNonNull(sessionCache, "sessionCache");
+        this.executionEventSink = executionEventSink;
         this.pluginExecutorFactory = Objects.requireNonNull(pluginExecutorFactory, "pluginExecutorFactory");
         this.dynamicNodeBuilder = dynamicNodeBuilder != null ? dynamicNodeBuilder : PipelineDynamicNodeBuilder.getInstance();
         this.nodeFeatureEnricherFactory = nodeFeatureEnricherFactory != null ? nodeFeatureEnricherFactory : DefaultNodeFeatureEnricherFactory.getInstance();
@@ -52,6 +62,11 @@ public final class WorkerBootstrapContextImpl implements WorkerBootstrapContext 
     @Override
     public Object getSessionCache() {
         return sessionCache;
+    }
+
+    @Override
+    public Object getExecutionEventSink() {
+        return executionEventSink;
     }
 
     @Override

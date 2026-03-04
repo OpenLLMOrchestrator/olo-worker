@@ -540,7 +540,7 @@ See [architecture-and-features.md § 3.2.1](architecture-and-features.md#321-fea
 - **olo-feature-debug** – `DebuggerFeature`: PRE_FINALLY, logs before/after every node; applicable to `*`.
 - **olo-feature-quota** – `QuotaFeature`: PRE, runs on root SEQUENCE only. **Must only run on the root node and once per run**—enable via pipeline scope.features only; do not attach per node (e.g. node-level preExecution/features). Checks tenant quota from config and Redis; throws `QuotaExceededException` if exceeded.
 - **olo-feature-metrics** – `MetricsFeature`: PRE_FINALLY, increments counters and records plugin execution metrics (duration, tokens, etc.); applicable to `*`.
-- **olo-run-ledger** – `RunLevelLedgerFeature`, `NodeLedgerFeature`: ledger-run on root, ledger-node on every node; persist run/node records when run ledger is enabled.
+- **olo-run-ledger** – `RunLevelLedgerFeature`, `NodeLedgerFeature`: ledger-run on root, ledger-node on every node; persist run/node records when run ledger is enabled. **ExecutionEventsFeature**: PRE_FINALLY, auto-attached when an execution event sink is registered; emits semantic steps (planner.started/completed, tool.started/completed, model.started/completed, workflow.started/completed/failed) for chat UI. See [execution-events.md](execution-events.md).
 
 ---
 

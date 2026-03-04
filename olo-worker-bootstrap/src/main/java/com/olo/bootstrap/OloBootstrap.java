@@ -11,6 +11,7 @@ import com.olo.features.FeatureRegistry;
 import com.olo.internal.features.InternalFeatures;
 import com.olo.internal.plugins.InternalPlugins;
 import com.olo.internal.tools.InternalTools;
+import com.olo.ledger.InMemoryExecutionEventSink;
 import com.olo.ledger.JdbcLedgerStore;
 import com.olo.ledger.LedgerStore;
 import com.olo.ledger.NoOpLedgerStore;
@@ -167,14 +168,15 @@ public final class OloBootstrap {
         }
 
         OloSessionCache sessionCache = new OloSessionCache(config);
-        InternalFeatures.registerInternalFeatures(FeatureRegistry.getInstance(), sessionCache, runLedger);
+        InMemoryExecutionEventSink executionEventSink = InMemoryExecutionEventSink.unbounded();
+        InternalFeatures.registerInternalFeatures(FeatureRegistry.getInstance(), sessionCache, runLedger, executionEventSink);
 
         validateAllPipelineConfigs(ctx);
 
         com.olo.plugin.PluginExecutorFactory pluginExecutorFactory = new DefaultPluginExecutorFactory();
         com.olo.node.DynamicNodeBuilder dynamicNodeBuilder = com.olo.bootstrap.node.PipelineDynamicNodeBuilder.getInstance();
         com.olo.node.NodeFeatureEnricherFactory nodeFeatureEnricherFactory = com.olo.bootstrap.node.DefaultNodeFeatureEnricherFactory.getInstance();
-        return new WorkerBootstrapContextImpl(ctx, runLedger, sessionCache, pluginExecutorFactory, dynamicNodeBuilder, nodeFeatureEnricherFactory);
+        return new WorkerBootstrapContextImpl(ctx, runLedger, sessionCache, executionEventSink, pluginExecutorFactory, dynamicNodeBuilder, nodeFeatureEnricherFactory);
     }
 
     private static void runBootstrapContributors(BootstrapContextImpl ctx, PluginManager pluginManager) {

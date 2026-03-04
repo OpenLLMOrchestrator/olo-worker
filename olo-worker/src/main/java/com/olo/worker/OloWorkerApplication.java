@@ -4,6 +4,7 @@ import com.olo.bootstrap.OloBootstrap;
 import com.olo.bootstrap.WorkerBootstrapContext;
 import com.olo.config.OloConfig;
 import com.olo.config.OloSessionCache;
+import com.olo.ledger.ExecutionEventSink;
 import com.olo.ledger.RunLedger;
 import com.olo.plugin.PluginExecutorFactory;
 import com.olo.worker.activity.ExecuteNodeDynamicActivity;
@@ -73,7 +74,8 @@ public final class OloWorkerApplication {
         PluginExecutorFactory pluginExecutorFactory = ctx.getPluginExecutorFactory();
         var dynamicNodeBuilder = ctx.getDynamicNodeBuilder();
         var nodeFeatureEnricher = ctx.getNodeFeatureEnricherFactory().getEnricher();
-        OloKernelActivitiesImpl oloKernelActivities = new OloKernelActivitiesImpl(sessionCache, tenantIds, runLedger, pluginExecutorFactory, dynamicNodeBuilder, nodeFeatureEnricher);
+        ExecutionEventSink executionEventSink = ctx.getExecutionEventSink() instanceof ExecutionEventSink ? (ExecutionEventSink) ctx.getExecutionEventSink() : null;
+        OloKernelActivitiesImpl oloKernelActivities = new OloKernelActivitiesImpl(sessionCache, tenantIds, runLedger, executionEventSink, pluginExecutorFactory, dynamicNodeBuilder, nodeFeatureEnricher);
         ExecuteNodeDynamicActivity executeNodeDynamicActivity = new ExecuteNodeDynamicActivity(oloKernelActivities);
 
         for (String taskQueue : taskQueues) {

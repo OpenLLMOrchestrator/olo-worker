@@ -44,7 +44,9 @@ public final class ExecutionPlanService {
             if (parallelResult == null || parallelResult.getSteps().isEmpty()) return "{\"linear\":false}";
         }
         try {
-            return PlanJsonSerializer.buildPlanJson(ctx, workflowInputJson, plan, parallelResult);
+            String runIdFromContext = workflowInput.getContext() != null && workflowInput.getContext().getRunId() != null
+                    ? workflowInput.getContext().getRunId().trim() : null;
+            return PlanJsonSerializer.buildPlanJson(ctx, workflowInputJson, plan, parallelResult, runIdFromContext);
         } catch (Exception e) {
             return "{\"linear\":false}";
         }

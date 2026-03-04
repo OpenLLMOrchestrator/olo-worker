@@ -6,6 +6,8 @@ import com.olo.config.TenantConfigRegistry;
 import com.olo.executiontree.tree.ExecutionTreeNode;
 import com.olo.executiontree.tree.NodeType;
 import com.olo.internal.features.InternalFeatures;
+import com.olo.ledger.ExecutionEvent;
+import com.olo.ledger.ExecutionEventSink;
 import com.olo.ledger.LedgerContext;
 import com.olo.ledger.NoOpLedgerStore;
 import com.olo.ledger.RunLedger;
@@ -29,6 +31,7 @@ public final class NodeExecutionService {
 
     private final Set<String> allowedTenantIds;
     private final RunLedger runLedger;
+    private final ExecutionEventSink executionEventSink;
     private final PluginExecutorFactory pluginExecutorFactory;
     private final com.olo.node.DynamicNodeBuilder dynamicNodeBuilder;
     private final NodeFeatureEnricher nodeFeatureEnricher;
@@ -37,8 +40,17 @@ public final class NodeExecutionService {
                                 PluginExecutorFactory pluginExecutorFactory,
                                 com.olo.node.DynamicNodeBuilder dynamicNodeBuilder,
                                 NodeFeatureEnricher nodeFeatureEnricher) {
+        this(allowedTenantIds, runLedger, null, pluginExecutorFactory, dynamicNodeBuilder, nodeFeatureEnricher);
+    }
+
+    public NodeExecutionService(Set<String> allowedTenantIds, RunLedger runLedger,
+                                ExecutionEventSink executionEventSink,
+                                PluginExecutorFactory pluginExecutorFactory,
+                                com.olo.node.DynamicNodeBuilder dynamicNodeBuilder,
+                                NodeFeatureEnricher nodeFeatureEnricher) {
         this.allowedTenantIds = allowedTenantIds != null ? allowedTenantIds : Set.of();
         this.runLedger = runLedger;
+        this.executionEventSink = executionEventSink;
         this.pluginExecutorFactory = pluginExecutorFactory;
         this.dynamicNodeBuilder = dynamicNodeBuilder;
         this.nodeFeatureEnricher = nodeFeatureEnricher != null ? nodeFeatureEnricher : (n, c) -> n;
@@ -60,6 +72,10 @@ public final class NodeExecutionService {
             } catch (Exception ignored) { }
             effectiveRunLedger.runStarted(r.runId, r.tenantId, r.queueName, r.queueName, r.queueName,
                     pluginVersionsJson, r.workflowInputJson, ledgerStartTime, null, null, configTreeJson, tenantConfigJson);
+            if (executionEventSink != null && r.runId != null) {
+                executionEventSink.emit(r.runId, new ExecutionEvent(
+                        ExecutionEvent.EventType.WORKFLOW_STARTED, "Workflow started", null, ledgerStartTime, null));
+            }
         }
         String runResult = null;
         String runStatus = "SUCCESS";
@@ -103,6 +119,11 @@ public final class NodeExecutionService {
             if (runIdForEnd == null) runIdForEnd = r.runId;
             if (runIdForEnd != null) {
                 long endTime = System.currentTimeMillis();
+                if (executionEventSink != null) {
+                    String eventType = "SUCCESS".equals(runStatus) ? ExecutionEvent.EventType.WORKFLOW_COMPLETED : ExecutionEvent.EventType.WORKFLOW_FAILED;
+                    String label = "SUCCESS".equals(runStatus) ? "Done" : "Error";
+                    executionEventSink.emit(runIdForEnd, new ExecutionEvent(eventType, label, null, endTime, null));
+                }
                 Long durationMs = ledgerStartTime > 0 ? (endTime - ledgerStartTime) : null;
                 effectiveRunLedger.runEnded(runIdForEnd, endTime, runResult != null ? runResult : "", runStatus, durationMs, null, null, null, null, "USD");
             }

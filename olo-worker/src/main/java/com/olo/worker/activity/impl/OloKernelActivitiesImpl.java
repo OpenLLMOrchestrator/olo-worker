@@ -6,6 +6,7 @@ import com.olo.config.OloSessionCache;
 import com.olo.input.model.WorkflowInput;
 import com.olo.node.DynamicNodeBuilder;
 import com.olo.node.NodeFeatureEnricher;
+import com.olo.ledger.ExecutionEventSink;
 import com.olo.worker.activity.OloKernelActivities;
 import com.olo.worker.activity.node.impl.NodeExecutionService;
 import com.olo.worker.activity.plan.impl.ExecutionPlanService;
@@ -35,12 +36,20 @@ public class OloKernelActivitiesImpl implements OloKernelActivities {
                                    com.olo.plugin.PluginExecutorFactory pluginExecutorFactory,
                                    DynamicNodeBuilder dynamicNodeBuilder,
                                    NodeFeatureEnricher nodeFeatureEnricher) {
+        this(sessionCache, allowedTenantIds, runLedger, null, pluginExecutorFactory, dynamicNodeBuilder, nodeFeatureEnricher);
+    }
+
+    public OloKernelActivitiesImpl(OloSessionCache sessionCache, List<String> allowedTenantIds, com.olo.ledger.RunLedger runLedger,
+                                   ExecutionEventSink executionEventSink,
+                                   com.olo.plugin.PluginExecutorFactory pluginExecutorFactory,
+                                   DynamicNodeBuilder dynamicNodeBuilder,
+                                   NodeFeatureEnricher nodeFeatureEnricher) {
         this.sessionCache = sessionCache;
         this.allowedTenantIds = allowedTenantIds != null ? Set.copyOf(allowedTenantIds) : Set.of();
         this.planService = new ExecutionPlanService(this.allowedTenantIds);
         this.pluginService = new PluginExecutionService(pluginExecutorFactory);
-        this.nodeExecutionService = new NodeExecutionService(this.allowedTenantIds, runLedger, pluginExecutorFactory, dynamicNodeBuilder, nodeFeatureEnricher);
-        this.treeRunService = new TreeRunService(this.allowedTenantIds, sessionCache, runLedger, pluginExecutorFactory, dynamicNodeBuilder, nodeFeatureEnricher);
+        this.nodeExecutionService = new NodeExecutionService(this.allowedTenantIds, runLedger, executionEventSink, pluginExecutorFactory, dynamicNodeBuilder, nodeFeatureEnricher);
+        this.treeRunService = new TreeRunService(this.allowedTenantIds, sessionCache, runLedger, executionEventSink, pluginExecutorFactory, dynamicNodeBuilder, nodeFeatureEnricher);
     }
 
     @Override

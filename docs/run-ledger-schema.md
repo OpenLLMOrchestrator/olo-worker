@@ -166,13 +166,13 @@ The workflow can run in two ways:
 - **LedgerContext** (`olo-run-ledger`) is a **thread-local** holder for the current run id. **NodeLedgerFeature** (and any code that needs the current run) reads `LedgerContext.getRunId()`. If it is null, the feature skips persisting (and logs a warning). So runId must be set on the **same thread** that runs the node.
 
 - **runExecutionTree path**  
-  - At the start of the activity: a new **runId** is generated (`UUID.randomUUID().toString()`). If the bootstrap did not provide a RunLedger, an **effectiveRunLedger** is used: `runLedger != null ? runLedger : new RunLedger(new NoOpLedgerStore())`, so runId is always set.  
+  - At the start of the activity: **runId** is taken from **workflow input `context.runId`** when the backend provides it (non-blank); otherwise a new UUID is generated. If the bootstrap did not provide a RunLedger, an **effectiveRunLedger** is used: `runLedger != null ? runLedger : new RunLedger(new NoOpLedgerStore())`, so runId is always set.  
   - The activity sets `LedgerContext.setRunId(runId)`, builds an **ExecutionConfigSnapshot** with that runId, and calls `ExecutionEngine.run(snapshot, ...)`.  
   - **ExecutionEngine** creates a **NodeExecutor** with `ledgerRunId = snapshot.getRunId()`. **NodeExecutor** sets `LedgerContext.setRunId(ledgerRunId)` at the start of each node execution (and in async branches) so node features always see a non-null runId.  
   - In a `finally` block the activity calls `effectiveRunLedger.runEnded(...)` and `LedgerContext.clear()`.
 
 - **executeNode path (per-node)**  
-  - The **execution plan** (from `getExecutionPlan`) now includes a **runId** field: when the plan is built (linear or parallel steps), the activity adds `out.put("runId", UUID.randomUUID().toString())`. The same plan JSON is passed to **every** `executeNode` call for that workflow run.  
+  - The **execution plan** (from `getExecutionPlan`) includes a **runId** field: when the plan is built, the activity uses **workflow input `context.runId`** when the backend provides it (non-blank); otherwise `UUID.randomUUID().toString()`. The same plan JSON is passed to **every** `executeNode` call for that workflow run.  
   - In **executeNode(payloadJson)**: the activity reads **runId from the plan** (`plan.get("runId")`). If present and non-blank, that value is **reused** as the runId for this invocation; otherwise a new UUID is generated (backward compatibility). So all nodes in a single logical run (PLANNER, then PLUGIN, then dynamic steps) share the **same runId**.  
   - The activity sets `LedgerContext.setRunId(runId)` and passes **runId** into **NodeExecutor** as `ledgerRunId`, so the executor also sets LedgerContext at the start of each node (and clears in finally).  
   - **runStarted** is called **only on the first node** in the plan: `isFirstNodeInPlan(plan, nodeId)` checks whether the current node is the first in the plan's `nodes` or `steps` list. Only then does the activity call `effectiveRunLedger.runStarted(runId, ...)`. So only one **olo_run** row is created per logical run.  

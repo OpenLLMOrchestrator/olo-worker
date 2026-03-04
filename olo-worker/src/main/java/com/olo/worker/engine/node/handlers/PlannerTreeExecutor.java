@@ -19,6 +19,7 @@ import com.olo.worker.engine.runtime.RuntimeExecutionTree;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -79,8 +80,11 @@ final class PlannerTreeExecutor {
                 factory.expand(new DynamicNodeExpansionRequest(node.getId(), specs));
                 log.info("PLANNER step 6a | nodeId={} | expand from creator | count={} | stepRefs={}", node.getId(), specs.size(),
                         specs.stream().map(NodeSpec::pluginRef).filter(Objects::nonNull).toList());
+                String planSummary = humanReadablePlanSummary(specs, null);
+                log.info("PLANNER step 8a | nodeId={} | exit (subtreeCreator path)", node.getId());
+                return planSummary != null ? Map.of("planSummary", planSummary, "message", planSummary) : null;
             }
-            log.info("PLANNER step 8a | nodeId={} | exit (subtreeCreator path)", node.getId());
+            log.info("PLANNER step 8a | nodeId={} | exit (subtreeCreator path, no steps)", node.getId());
             return null;
         }
 
@@ -105,11 +109,44 @@ final class PlannerTreeExecutor {
         if (!expanded.expandedNodes().isEmpty()) {
             log.info("PLANNER step 7b | nodeId={} | expand done | parser={} | stepsCount={} | stepRefs={}", node.getId(), parserName, expanded.expandedNodes().size(),
                     expanded.expandedNodes().stream().map(ExpandedNode::pluginRef).filter(Objects::nonNull).toList());
+            String planSummary = humanReadablePlanSummaryFromExpanded(expanded.expandedNodes());
+            log.info("PLANNER step 9 | nodeId={} | exit", node.getId());
+            return planSummary != null ? Map.of("planSummary", planSummary, "message", planSummary) : null;
         } else {
             log.warn("PLANNER could not add tree: no nodes attached. nodeId={} | parser={} | requestedSpecsCount={}",
                     node.getId(), parserName, requestedSpecs != null ? requestedSpecs.size() : 0);
         }
         log.info("PLANNER step 9 | nodeId={} | exit", node.getId());
         return null;
+    }
+
+    /** Build a human-readable numbered list of the plan for chat UI (e.g. "Planner suggested:\n1. searchDocuments\n2. evaluator"). */
+    private static String humanReadablePlanSummary(List<NodeSpec> specs, List<ExpandedNode> expanded) {
+        List<String> names = new ArrayList<>();
+        if (specs != null) {
+            for (NodeSpec s : specs) {
+                String ref = s != null ? s.pluginRef() : null;
+                String display = s != null && s.displayName() != null && !s.displayName().isBlank() ? s.displayName() : ref;
+                if (display != null && !display.isBlank()) names.add(display);
+            }
+        }
+        if (expanded != null) {
+            for (ExpandedNode n : expanded) {
+                String ref = n != null ? n.pluginRef() : null;
+                String display = n != null && n.displayName() != null && !n.displayName().isBlank() ? n.displayName() : ref;
+                if (display != null && !display.isBlank() && !names.contains(display)) names.add(display);
+            }
+        }
+        if (names.isEmpty()) return null;
+        StringBuilder sb = new StringBuilder("Planner suggested:\n");
+        for (int i = 0; i < names.size(); i++) {
+            sb.append(i + 1).append(". ").append(names.get(i));
+            if (i < names.size() - 1) sb.append("\n");
+        }
+        return sb.toString();
+    }
+
+    private static String humanReadablePlanSummaryFromExpanded(List<ExpandedNode> expanded) {
+        return humanReadablePlanSummary(null, expanded != null ? expanded : List.of());
     }
 }

@@ -6,6 +6,8 @@ import com.olo.features.debug.DebuggerFeature;
 import com.olo.features.metrics.MetricsFeature;
 import com.olo.features.quota.QuotaContext;
 import com.olo.features.quota.QuotaFeature;
+import com.olo.ledger.ExecutionEventSink;
+import com.olo.ledger.ExecutionEventsFeature;
 import com.olo.ledger.NodeLedgerFeature;
 import com.olo.ledger.RunLedger;
 import com.olo.ledger.RunLevelLedgerFeature;
@@ -32,6 +34,18 @@ public final class InternalFeatures {
      * @param runLedgerOrNull run ledger if ledger is enabled, null to skip ledger features
      */
     public static void registerInternalFeatures(FeatureRegistry registry, OloSessionCache sessionCache, RunLedger runLedgerOrNull) {
+        registerInternalFeatures(registry, sessionCache, runLedgerOrNull, null);
+    }
+
+    /**
+     * Registers internal features with the given registry. Call once at worker startup.
+     *
+     * @param registry   global feature registry
+     * @param sessionCache session cache for quota lookups (required for QuotaFeature)
+     * @param runLedgerOrNull run ledger if ledger is enabled, null to skip ledger features
+     * @param executionEventSinkOrNull sink for semantic execution events (chat UI); null to skip
+     */
+    public static void registerInternalFeatures(FeatureRegistry registry, OloSessionCache sessionCache, RunLedger runLedgerOrNull, ExecutionEventSink executionEventSinkOrNull) {
         QuotaContext.setSessionCache(sessionCache);
 
         registry.registerInternal(new DebuggerFeature());
@@ -49,6 +63,11 @@ public final class InternalFeatures {
             log.info("Registered run ledger features (ledger-run on root, ledger-node on every node); OLO_RUN_LEDGER=true");
         } else {
             log.debug("Run ledger disabled; no ledger features registered");
+        }
+
+        if (executionEventSinkOrNull != null) {
+            registry.registerInternal(new ExecutionEventsFeature(executionEventSinkOrNull));
+            log.info("Registered execution-events feature (semantic steps for chat UI)");
         }
     }
 

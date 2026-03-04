@@ -39,6 +39,11 @@ public final class FeatureResolver {
             scopeFeatureNames = new ArrayList<>(scopeFeatureNames);
             scopeFeatureNames.add("ledger-node");
         }
+        // When execution event sink is enabled, execution-events is registered but may not be in pipeline scope; attach it so planner/tool/model steps are emitted for chat UI.
+        if (registry.get("execution-events") != null && !scopeFeatureNames.contains("execution-events")) {
+            scopeFeatureNames = new ArrayList<>(scopeFeatureNames);
+            scopeFeatureNames.add("execution-events");
+        }
         // Ensure debug is included for -debug queues (static and dynamically created nodes get debug pre/post).
         if (queueName != null && queueName.endsWith("-debug") && !scopeFeatureNames.contains("debug")) {
             scopeFeatureNames = new ArrayList<>(scopeFeatureNames);

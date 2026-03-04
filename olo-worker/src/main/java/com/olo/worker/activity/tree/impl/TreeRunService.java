@@ -3,6 +3,8 @@ package com.olo.worker.activity.tree.impl;
 import com.olo.config.OloConfig;
 import com.olo.config.OloSessionCache;
 import com.olo.input.model.WorkflowInput;
+import com.olo.ledger.ExecutionEvent;
+import com.olo.ledger.ExecutionEventSink;
 import com.olo.ledger.RunLedger;
 import com.olo.plugin.PluginExecutorFactory;
 import org.slf4j.Logger;
@@ -18,6 +20,7 @@ public final class TreeRunService {
     private final Set<String> allowedTenantIds;
     private final OloSessionCache sessionCache;
     private final RunLedger runLedger;
+    private final ExecutionEventSink executionEventSink;
     private final PluginExecutorFactory pluginExecutorFactory;
     private final com.olo.node.DynamicNodeBuilder dynamicNodeBuilder;
     private final com.olo.node.NodeFeatureEnricher nodeFeatureEnricher;
@@ -26,9 +29,18 @@ public final class TreeRunService {
                           PluginExecutorFactory pluginExecutorFactory,
                           com.olo.node.DynamicNodeBuilder dynamicNodeBuilder,
                           com.olo.node.NodeFeatureEnricher nodeFeatureEnricher) {
+        this(allowedTenantIds, sessionCache, runLedger, null, pluginExecutorFactory, dynamicNodeBuilder, nodeFeatureEnricher);
+    }
+
+    public TreeRunService(Set<String> allowedTenantIds, OloSessionCache sessionCache, RunLedger runLedger,
+                          ExecutionEventSink executionEventSink,
+                          PluginExecutorFactory pluginExecutorFactory,
+                          com.olo.node.DynamicNodeBuilder dynamicNodeBuilder,
+                          com.olo.node.NodeFeatureEnricher nodeFeatureEnricher) {
         this.allowedTenantIds = allowedTenantIds != null ? allowedTenantIds : Set.of();
         this.sessionCache = sessionCache;
         this.runLedger = runLedger;
+        this.executionEventSink = executionEventSink;
         this.pluginExecutorFactory = pluginExecutorFactory;
         this.dynamicNodeBuilder = dynamicNodeBuilder;
         this.nodeFeatureEnricher = nodeFeatureEnricher;
@@ -55,6 +67,10 @@ public final class TreeRunService {
         TreeContextResolver.ResolvedContext ctx = TreeContextResolver.resolve(tenantId, queueName, workflowInput);
         if (ctx.status == TreeContextResolver.Status.NO_CONFIG || ctx.status == TreeContextResolver.Status.NO_PIPELINE) return "";
         TreeRunLedger.LedgerRunContext ledgerCtx = TreeRunLedger.startRun(ctx, runLedger, workflowInputJson);
+        if (executionEventSink != null && ctx.runId != null) {
+            executionEventSink.emit(ctx.runId, new ExecutionEvent(
+                    ExecutionEvent.EventType.WORKFLOW_STARTED, "Workflow started", null, System.currentTimeMillis(), null));
+        }
         String runResult = null;
         String runStatus = "FAILED";
         Throwable runFailure = null;
@@ -72,6 +88,11 @@ public final class TreeRunService {
             log.info("Execution tree exit | transactionId={} | status=FAILED | error={}", ctx.transactionId, t.getMessage());
             throw t;
         } finally {
+            if (executionEventSink != null && ctx.runId != null) {
+                String eventType = "SUCCESS".equals(runStatus) ? ExecutionEvent.EventType.WORKFLOW_COMPLETED : ExecutionEvent.EventType.WORKFLOW_FAILED;
+                String label = "SUCCESS".equals(runStatus) ? "Done" : ("Error: " + (runFailure != null ? runFailure.getMessage() : runStatus));
+                executionEventSink.emit(ctx.runId, new ExecutionEvent(eventType, label, null, System.currentTimeMillis(), null));
+            }
             TreeRunLedger.endRun(ctx, ledgerCtx, runResult, runStatus, runFailure);
         }
     }
