@@ -17,10 +17,7 @@ import com.olo.ledger.LedgerStore;
 import com.olo.ledger.NoOpLedgerStore;
 import com.olo.ledger.RunLedger;
 import com.olo.planner.a.PlannerBootstrapContributor;
-import com.olo.plugin.DefaultPluginExecutorFactory;
-import com.olo.plugin.PluginManager;
-import com.olo.plugin.PluginProvider;
-import com.olo.plugin.PluginRegistry;
+import com.olo.plugin.*;
 import com.olo.tools.PlannerToolDescriptor;
 import com.olo.tools.ToolProvider;
 import com.olo.bootstrap.validation.ConfigCompatibilityValidator;
@@ -45,6 +42,7 @@ import java.util.stream.Collectors;
 public final class OloBootstrap {
 
     private static final Logger log = LoggerFactory.getLogger(OloBootstrap.class);
+    private static PluginExecutorFactory pluginExecutorFactory;
 
     private OloBootstrap() {
     }
@@ -221,7 +219,9 @@ public final class OloBootstrap {
 
     /**
      * Resolves the list of tenant ids to load config for: Redis key {@link TenantEntry#REDIS_TENANTS_KEY}
-     * (JSON array of {@code {"id":"...","name":"..."}}). If not available or invalid, uses {@link OloConfig#getTenantIds()} from env (OLO_TENANT_IDS).
+     * (JSON array of {@code {"id":"...","name":"..."}}). If not available or invalid, creates a single
+     * default tenant from {@code OLO_DEFAULT_TENANT_ID} and {@code OLO_DEFAULT_TENANT_NAME} and writes
+     * it to {@code olo:tenants}.
      */
     private static List<String> resolveTenantIds(RedisPipelineConfigSourceSink configSourceSink, OloConfig config) {
         try {
@@ -245,23 +245,19 @@ public final class OloBootstrap {
                 return fromRedis;
             }
         } catch (Exception e) {
-            log.debug("Bootstrap: could not read {} from Redis, using OLO_TENANT_IDS: {}", TenantEntry.REDIS_TENANTS_KEY, e.getMessage());
+            log.debug("Bootstrap: could not read {} from Redis, will create default tenant: {}", TenantEntry.REDIS_TENANTS_KEY, e.getMessage());
         }
-        List<String> fromEnv = config.getTenantIds();
-        if (fromEnv.isEmpty()) {
-            fromEnv = List.of(OloConfig.normalizeTenantId(null));
+        String defaultId = OloConfig.normalizeTenantId(null);
+        String defaultNameEnv = System.getenv("OLO_DEFAULT_TENANT_NAME");
+        String defaultName = (defaultNameEnv != null && !defaultNameEnv.isBlank()) ? defaultNameEnv.trim() : "default";
+        log.info("Bootstrap: no tenants in Redis {}; creating default tenant (id={}, name={}) from OLO_DEFAULT_TENANT_ID and OLO_DEFAULT_TENANT_NAME", TenantEntry.REDIS_TENANTS_KEY, defaultId, defaultName);
+        try {
+            String json = TenantEntry.toJsonArray(List.of(defaultId), defaultId, defaultName);
+            configSourceSink.putInCache(TenantEntry.REDIS_TENANTS_KEY, json);
+            log.info("Bootstrap: created {} with default tenant in Redis", TenantEntry.REDIS_TENANTS_KEY);
+        } catch (Exception e) {
+            log.warn("Bootstrap: could not write {} to Redis: {}", TenantEntry.REDIS_TENANTS_KEY, e.getMessage());
         }
-        if (!fromEnv.isEmpty()) {
-            log.info("Bootstrap: using tenant list from env OLO_TENANT_IDS: {}", fromEnv);
-            try {
-                String defaultId = OloConfig.normalizeTenantId(null);
-                String json = TenantEntry.toJsonArray(fromEnv, defaultId, "default");
-                configSourceSink.putInCache(TenantEntry.REDIS_TENANTS_KEY, json);
-                log.info("Bootstrap: created {} with {} tenant(s) from env (key was missing or empty)", TenantEntry.REDIS_TENANTS_KEY, fromEnv.size());
-            } catch (Exception e) {
-                log.warn("Bootstrap: could not write {} to Redis: {}", TenantEntry.REDIS_TENANTS_KEY, e.getMessage());
-            }
-        }
-        return fromEnv;
+        return List.of(defaultId);
     }
 }
