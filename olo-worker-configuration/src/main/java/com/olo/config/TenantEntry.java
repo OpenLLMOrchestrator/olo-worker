@@ -132,12 +132,29 @@ public final class TenantEntry {
      * @return JSON string, or "[]" if tenantIds is null or empty
      */
     public static String toJsonArray(List<String> tenantIds) {
+        return toJsonArray(tenantIds, null, "");
+    }
+
+    /**
+     * Serializes a list of tenant ids to the JSON array format expected at {@value #REDIS_TENANTS_KEY}.
+     * When a tenant id equals {@code defaultTenantId}, its name is set to {@code defaultTenantName}; otherwise "".
+     *
+     * @param tenantIds          list of tenant ids
+     * @param defaultTenantId    id of the default tenant (e.g. from OloConfig); null to use empty name for all
+     * @param defaultTenantName  name for the default tenant (e.g. "default")
+     * @return JSON string, or "[]" if tenantIds is null or empty
+     */
+    public static String toJsonArray(List<String> tenantIds, String defaultTenantId, String defaultTenantName) {
         if (tenantIds == null || tenantIds.isEmpty()) {
             return "[]";
         }
+        String defaultName = defaultTenantName != null ? defaultTenantName : "";
         List<TenantEntry> entries = tenantIds.stream()
                 .filter(id -> id != null && !id.isBlank())
-                .map(id -> new TenantEntry(id.trim(), ""))
+                .map(id -> {
+                    String name = (defaultTenantId != null && defaultTenantId.trim().equals(id.trim())) ? defaultName : "";
+                    return new TenantEntry(id.trim(), name);
+                })
                 .collect(Collectors.toList());
         try {
             return new ObjectMapper().writeValueAsString(entries);

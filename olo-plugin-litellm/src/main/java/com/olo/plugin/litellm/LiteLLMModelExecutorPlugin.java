@@ -120,6 +120,6 @@ public final class LiteLLMModelExecutorPlugin implements ModelExecutorPlugin, Re
     }
 
     public void register(String pluginId) {
-        register("default", pluginId);
+        register(com.olo.config.OloConfig.normalizeTenantId(null), pluginId);
     }
 }

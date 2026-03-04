@@ -1,5 +1,6 @@
 package com.olo.bootstrap.validation;
 
+import com.olo.config.OloConfig;
 import com.olo.executiontree.config.PipelineConfiguration;
 import com.olo.executiontree.config.PipelineDefinition;
 import com.olo.executiontree.scope.FeatureDef;
@@ -36,7 +37,7 @@ public final class ConfigCompatibilityValidator {
 
     public ValidationResult validate(String tenantId, PipelineConfiguration config) {
         List<String> errors = new ArrayList<>();
-        String tenant = tenantId != null && !tenantId.isBlank() ? tenantId.trim() : "default";
+        String tenant = OloConfig.normalizeTenantId(tenantId);
 
         if (config == null) {
             errors.add("Config is null");
@@ -121,7 +122,7 @@ public final class ConfigCompatibilityValidator {
     }
 
     public void validateOrThrow(PipelineConfiguration config) {
-        validateOrThrow("default", config);
+        validateOrThrow(OloConfig.normalizeTenantId(null), config);
     }
 
     private static int compareVersions(String a, String b) {

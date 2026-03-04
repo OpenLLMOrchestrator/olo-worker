@@ -55,7 +55,7 @@ public final class LocalContext {
      */
     public static LocalContext forQueue(String tenantKey, String queueName, String configVersion) {
         Objects.requireNonNull(queueName, "queueName");
-        String tenant = tenantKey != null && !tenantKey.isBlank() ? tenantKey.trim() : "default";
+        String tenant = com.olo.config.OloConfig.normalizeTenantId(tenantKey);
         GlobalContext global = GlobalConfigurationContext.get(tenant, queueName);
         if (global == null) {
             log.warn("No global pipeline configuration for tenant={} queue={}; cannot create LocalContext", tenant, queueName);

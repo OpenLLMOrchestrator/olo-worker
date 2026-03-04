@@ -254,7 +254,8 @@ public final class OloBootstrap {
         if (!fromEnv.isEmpty()) {
             log.info("Bootstrap: using tenant list from env OLO_TENANT_IDS: {}", fromEnv);
             try {
-                String json = TenantEntry.toJsonArray(fromEnv);
+                String defaultId = OloConfig.normalizeTenantId(null);
+                String json = TenantEntry.toJsonArray(fromEnv, defaultId, "default");
                 configSourceSink.putInCache(TenantEntry.REDIS_TENANTS_KEY, json);
                 log.info("Bootstrap: created {} with {} tenant(s) from env (key was missing or empty)", TenantEntry.REDIS_TENANTS_KEY, fromEnv.size());
             } catch (Exception e) {

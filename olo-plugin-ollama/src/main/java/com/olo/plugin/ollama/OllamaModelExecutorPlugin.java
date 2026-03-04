@@ -159,7 +159,7 @@ public final class OllamaModelExecutorPlugin implements ModelExecutorPlugin, Res
      * @param pluginId id to register under (e.g. "GPT4_EXECUTOR" to match pipeline scope)
      */
     public void register(String pluginId) {
-        register("default", pluginId);
+        register(com.olo.config.OloConfig.normalizeTenantId(null), pluginId);
     }
 
     /**

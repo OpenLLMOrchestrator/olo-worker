@@ -99,6 +99,6 @@ public final class StableDiffusionImagePlugin implements ImageGenerationPlugin {
     }
 
     public void register(String pluginId) {
-        register("default", pluginId);
+        register(com.olo.config.OloConfig.normalizeTenantId(null), pluginId);
     }
 }

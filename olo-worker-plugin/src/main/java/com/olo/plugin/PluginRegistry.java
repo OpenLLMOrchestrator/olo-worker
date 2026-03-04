@@ -1,5 +1,7 @@
 package com.olo.plugin;
 
+import com.olo.config.OloConfig;
+
 import java.util.Collections;
 import java.util.Map;
 import java.util.Objects;
@@ -138,8 +140,7 @@ public final class PluginRegistry {
     }
 
     private static String normalize(String tenantId) {
-        if (tenantId == null || tenantId.isBlank()) return "default";
-        return tenantId.trim();
+        return OloConfig.normalizeTenantId(tenantId);
     }
 
     /**
