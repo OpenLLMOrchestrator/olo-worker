@@ -18,6 +18,19 @@ import java.util.Map;
 public interface ExecutablePlugin {
 
     /**
+     * Declares how this plugin should be executed by the runtime.
+     *
+     * <p>Default is {@link ExecutionMode#ACTIVITY}, matching the current behavior where
+     * plugins run as Temporal activities. Plugins should override this to return the
+     * desired mode (e.g. {@code WORKFLOW} for deterministic in-workflow execution).</p>
+     *
+     * @return execution mode for this plugin
+     */
+    default ExecutionMode executionMode() {
+        return ExecutionMode.ACTIVITY;
+    }
+
+    /**
      * Executes the plugin with the given inputs and tenant configuration.
      *
      * @param inputs       map of parameter names to values (contract-specific)
@@ -27,3 +40,4 @@ public interface ExecutablePlugin {
      */
     Map<String, Object> execute(Map<String, Object> inputs, TenantConfig tenantConfig) throws Exception;
 }
+

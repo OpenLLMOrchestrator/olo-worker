@@ -46,7 +46,7 @@ public final class FeatureAttachmentResolver {
      * Resolves the effective pre and post feature name lists for the given node.
      *
      * @param node                        the execution tree node
-     * @param queueName                   task queue name (e.g. olo-chat-queue-oolama-debug)
+     * @param queueName                   task queue name (e.g. olo-chat-queue-ollama-debug)
      * @param pipelineScopeFeatureNames  feature names from pipeline scope (and/or root allowed list)
      * @param registry                    feature registry to check applicability and phase
      * @return resolved pre, postSuccess, postError, finally lists (no duplicates, order preserved)

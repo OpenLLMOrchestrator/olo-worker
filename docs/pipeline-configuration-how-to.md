@@ -1,6 +1,6 @@
 # Pipeline configuration: how to use
 
-The pipeline configuration defines one or more **named pipelines**, each with an input contract, variable registry, scope (plugins/features), and an execution tree. Root-level **plugin** and **feature restrictions** apply across all pipelines.
+The pipeline configuration defines one or more **named pipelines**, each with an input contract, variable registry, scope (plugins/features), and an execution tree. For execution tree design (structure, flow, variables), see [execution-tree-design.md](execution-tree-design.md). Root-level **plugin** and **feature restrictions** apply across all pipelines.
 
 ## Sample file
 
@@ -37,7 +37,7 @@ The pipeline configuration defines one or more **named pipelines**, each with an
 | `executionTree` | object | Root node of the execution tree (SEQUENCE, PLUGIN, etc.). |
 | `outputContract` | object | **Out contract**: final result shape to the user (parameters: name, type). |
 | `resultMapping` | array | Maps execution variables (e.g. OUT) to output contract parameters (final result). |
-| `executionType` | string | **SYNC** (default) or **ASYNC**. When ASYNC, every node except JOIN runs in a worker thread; JOIN runs synchronously to merge. |
+| `executionType` | string | Pipeline-level execution mode: **`SYNC`** (default), **`ASYNC`**, or **`FIRE_AND_FORGET`**. See **Execution type and node overrides** below. |
 
 ### inputContract
 
@@ -67,6 +67,34 @@ Maps execution output variables to output contract parameters. Each entry:
 - **outputParameter**: Parameter name in the output contract (final result field).
 
 Example: `{ "variable": "finalAnswer", "outputParameter": "answer" }` means the execution variable `finalAnswer` is exposed to the user as the output parameter `answer`.
+
+### Execution type and node overrides
+
+Execution behavior is controlled at two levels:
+
+- **Pipeline-level `executionType` (this section)** — how the **overall pipeline run** is driven.
+- **Per-node `executionMode` (in `executionTree` nodes)** — optional override for individual nodes.
+
+Valid values (for both the pipeline `executionType` and node-level `executionMode`):
+
+- **`SYNC`** (default):  
+  - The API / caller waits for the pipeline run to complete and receive a final result.  
+  - With Temporal, the worker starts a workflow and **waits on its completion result** before responding (typical request/response behavior).
+
+- **`ASYNC`**:  
+  - The pipeline is started, but the API returns **immediately** with an execution id / run id; the caller can poll or subscribe to events for completion.  
+  - With Temporal, the worker **starts the workflow and returns the run id**; completion is observed via queries, signals, or execution events instead of blocking the initial request.
+
+- **`FIRE_AND_FORGET`**:  
+  - The pipeline is started in the background and **no strong completion contract** is exposed to the caller (best‑effort processing, often for logging, telemetry, or low‑value side effects).  
+  - With Temporal, this typically maps to a **non-blocking workflow or activity invocation** where only minimal status may be recorded; the caller does not wait and may not track completion at all.
+
+**Precedence rules:**
+
+- If a node’s `executionMode` is **null/absent**, it **inherits** the pipeline’s `executionType`.
+- If a node’s `executionMode` is set, it **overrides** the pipeline `executionType` for that node only (for example, a mostly `ASYNC` pipeline with a final `SYNC` aggregation node).
+
+Node-level `executionMode` controls how the **Execution Engine / worker schedules that node** (blocking vs non‑blocking) and how it interacts with Temporal, but it is **separate from** plugin‑level `ExecutionMode` (`WORKFLOW`, `ACTIVITY`, etc.) which controls *how* a plugin is run inside Temporal.
 
 ### executionTree
 
@@ -218,11 +246,11 @@ String tenantId = "default";
 String tenantScopedPrefix = tenantId + ":olo:kernel:config";
 ConfigurationLoader loader = new ConfigurationLoader(
     myConfigSource, myConfigSink, configDir, retryWaitSeconds, tenantScopedPrefix);
-PipelineConfiguration config = loader.loadConfiguration(tenantId, "chat-queue-oolama", "1.0");
+PipelineConfiguration config = loader.loadConfiguration(tenantId, "chat-queue-ollama", "1.0");
 
 // Bootstrap: for each tenant, load all queues into GlobalConfigurationContext (runtime store)
 List<String> tenants = List.of("default");
-List<String> queues = List.of("chat-queue-oolama", "rag-queue-openai");
+List<String> queues = List.of("chat-queue-ollama", "rag-queue-openai");
 String version = "1.0";
 for (String tenant : tenants) {
     String prefix = tenant + ":olo:kernel:config";
@@ -236,7 +264,7 @@ for (String tenant : tenants) {
 // Map<String, PipelineConfiguration> byKey = ctx.getPipelineConfigByQueue();  // keys "tenant:queue"
 
 // Read from runtime config store (GlobalConfigurationContext)
-GlobalContext entry = GlobalConfigurationContext.get(tenantId, "chat-queue-oolama");
+GlobalContext entry = GlobalConfigurationContext.get(tenantId, "chat-queue-ollama");
 PipelineConfiguration cfg = entry != null ? entry.getConfiguration() : null;
 ```
 

@@ -38,14 +38,14 @@ public final class PipelineDynamicNodeBuilder implements DynamicNodeBuilder {
                 id,
                 displayName,
                 NodeType.PLUGIN,
-                List.of(),
+                List.<ExecutionTreeNode>of(),
                 "PLUGIN",
                 pluginRef,
                 spec.inputMappings(),
                 spec.outputMappings(),
                 EMPTY, EMPTY, EMPTY, EMPTY, EMPTY, EMPTY, EMPTY, EMPTY,
-                Map.of(),
-                null, null, null
+                Map.<String, Object>of(),
+                null, null, null, null
         );
         return PipelineNodeFeatureEnricher.getInstance().enrich(raw, context);
     }

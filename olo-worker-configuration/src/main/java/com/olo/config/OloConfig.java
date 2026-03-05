@@ -11,7 +11,7 @@ import java.util.stream.Stream;
  * Configuration loaded from environment variables for the OLO Temporal worker.
  * <p>
  * Queue names: OLO_QUEUE (comma-separated). If OLO_IS_DEBUG_ENABLED is true,
- * each queue also gets a -debug variant (e.g. olo-chat-queue-oolama-debug, olo-rag-queue-openai-debug).
+ * each queue also gets a -debug variant (e.g. olo-chat-queue-ollama-debug, olo-rag-queue-openai-debug).
  * <p>
  * Cache: OLO_CACHE_HOST, OLO_CACHE_PORT. DB: OLO_DB_HOST, OLO_DB_PORT.
  */
@@ -238,7 +238,7 @@ public final class OloConfig {
         String queueEnv = System.getenv(ENV_QUEUE);
         List<String> baseQueues = parseCommaSeparated(queueEnv);
         if (baseQueues.isEmpty()) {
-            baseQueues = List.of("olo-chat-queue-oolama", "olo-rag-queue-openai");
+            baseQueues = List.of("olo-chat-queue-ollama", "olo-rag-queue-openai");
         }
 
         boolean isDebug = parseBoolean(System.getenv(ENV_IS_DEBUG_ENABLED), true);

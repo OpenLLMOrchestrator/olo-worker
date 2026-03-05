@@ -34,7 +34,7 @@ public final class LocalContext {
      * configuration from the global context. Call this when a new workflow starts.
      *
      * @param tenantKey tenant id (use {@link com.olo.config.OloConfig#normalizeTenantId(String)} if from workflow context)
-     * @param queueName task queue name (e.g. olo-chat-queue-oolama or olo-chat-queue-oolama-debug)
+     * @param queueName task queue name (e.g. olo-chat-queue-ollama or olo-chat-queue-ollama-debug)
      * @return local context with a deep copy of the execution tree for that queue, or null if no config is loaded for the tenant/queue
      */
     public static LocalContext forQueue(String tenantKey, String queueName) {

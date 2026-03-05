@@ -56,7 +56,7 @@ Each event is a JSON object:
   "payload": {
     "message": "Planner suggested:\n1. RESEARCH_TOOL\n2. CRITIC_TOOL",
     "pluginId": null,
-    "queueName": "olo-chat-queue-oolama-debug"
+    "queueName": "olo-chat-queue-ollama-debug"
   },
   "timestampMillis": 1709300000000,
   "nodeId": "91665ec4-fa1e-4dee-a8f0-4a735112e9c3"

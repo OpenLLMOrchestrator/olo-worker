@@ -25,7 +25,8 @@ public final class NodeWriter {
     public void nodeStarted(Connection c, String runId, String tenantId, String nodeId, String nodeType,
                             String inputSnapshotJson, long startTimeMillis,
                             String parentNodeId, Integer executionOrder, Integer depth) throws SQLException {
-        String sql = "INSERT INTO " + TABLE_NODE + " (run_id, tenant_id, tenant_name, node_id, node_name, node_type, input_snapshot, start_time, status, parent_node_id, parent_node_name, execution_order, depth, attempt) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)";
+        String sql = "INSERT INTO " + TABLE_NODE + " (run_id, tenant_id, tenant_name, node_id, node_name, node_type, input_snapshot, start_time, status, parent_node_id, parent_node_name, execution_order, depth, attempt) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?) "
+                + "ON CONFLICT (run_id, node_id) DO UPDATE SET tenant_id=EXCLUDED.tenant_id, tenant_name=EXCLUDED.tenant_name, node_name=EXCLUDED.node_name, node_type=EXCLUDED.node_type, input_snapshot=EXCLUDED.input_snapshot, start_time=EXCLUDED.start_time, status=EXCLUDED.status, parent_node_id=EXCLUDED.parent_node_id, parent_node_name=EXCLUDED.parent_node_name, execution_order=EXCLUDED.execution_order, depth=EXCLUDED.depth, attempt=" + TABLE_NODE + ".attempt + 1, end_time=NULL, output_snapshot=NULL, error_code=NULL, error_message=NULL, error_details=NULL";
         try (PreparedStatement ps = c.prepareStatement(sql)) {
             ps.setObject(1, LedgerSqlUtils.toUuid(runId));
             ps.setObject(2, tenantId != null && !tenantId.isBlank() ? LedgerSqlUtils.toUuid(tenantId) : null);

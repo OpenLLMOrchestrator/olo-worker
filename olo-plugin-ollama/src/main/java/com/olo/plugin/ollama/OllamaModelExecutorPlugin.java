@@ -21,7 +21,7 @@ import java.util.Objects;
 
 /**
  * Model-executor plugin that calls the Ollama API to get AI model responses.
- * Registers with {@link PluginRegistry} under a configurable id (e.g. "GPT4_EXECUTOR" for olo-chat-queue-oolama).
+ * Registers with {@link PluginRegistry} under a configurable id (e.g. "GPT4_EXECUTOR" for olo-chat-queue-ollama).
  * <p>
  * Input: "prompt" (String). Output: "responseText" (String).
  * Uses {@code POST http://baseUrl/api/chat} with {@code model} and a single user message.
@@ -46,16 +46,33 @@ public final class OllamaModelExecutorPlugin implements ModelExecutorPlugin, Res
 
     private static final ObjectMapper MAPPER = new ObjectMapper();
 
+    /** Default HTTP request timeout for chat (tool chains like RESEARCH_TOOL may need longer). */
+    private static final int DEFAULT_REQUEST_TIMEOUT_SECONDS = 300;
+
     private final String baseUrl;
     private final String model;
+    private final int requestTimeoutSeconds;
     private final HttpClient httpClient;
 
     /**
      * Creates a plugin using the given base URL (e.g. "http://localhost:11434") and model name (e.g. "llama3.2").
+     * Uses {@value #DEFAULT_REQUEST_TIMEOUT_SECONDS}s request timeout.
      */
     public OllamaModelExecutorPlugin(String baseUrl, String model) {
+        this(baseUrl, model, DEFAULT_REQUEST_TIMEOUT_SECONDS);
+    }
+
+    /**
+     * Creates a plugin with base URL, model, and custom request timeout (e.g. for long-running tool chains).
+     *
+     * @param baseUrl               e.g. "http://localhost:11434"
+     * @param model                 e.g. "llama3.2"
+     * @param requestTimeoutSeconds timeout for the HTTP request (default 300)
+     */
+    public OllamaModelExecutorPlugin(String baseUrl, String model, int requestTimeoutSeconds) {
         this.baseUrl = baseUrl != null && !baseUrl.isBlank() ? baseUrl.trim() : "http://localhost:11434";
         this.model = model != null && !model.isBlank() ? model.trim() : "llama3.2";
+        this.requestTimeoutSeconds = requestTimeoutSeconds > 0 ? requestTimeoutSeconds : DEFAULT_REQUEST_TIMEOUT_SECONDS;
         this.httpClient = HttpClient.newBuilder()
                 .connectTimeout(Duration.ofSeconds(10))
                 .build();
@@ -111,12 +128,19 @@ public final class OllamaModelExecutorPlugin implements ModelExecutorPlugin, Res
         URI uri = URI.create(effectiveBaseUrl + "/api/chat");
         HttpRequest request = HttpRequest.newBuilder(uri)
                 .header("Content-Type", "application/json")
-                .timeout(Duration.ofSeconds(120))
+                .timeout(Duration.ofSeconds(requestTimeoutSeconds))
                 .POST(HttpRequest.BodyPublishers.ofString(json, StandardCharsets.UTF_8))
                 .build();
         HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
         if (response.statusCode() != 200) {
-            throw new RuntimeException("Ollama API error: " + response.statusCode() + " " + response.body());
+            String body = response.body();
+            if (response.statusCode() == 404 && body != null && body.contains("not found")) {
+                throw new RuntimeException(
+                    "Ollama model '" + effectiveModel + "' not found. Pull it with: ollama pull " + effectiveModel
+                        + " (or set OLLAMA_MODEL / tenant ollamaModel to a model you have). "
+                        + "Ollama must be available at " + effectiveBaseUrl + ". Original: " + body);
+            }
+            throw new RuntimeException("Ollama API error: " + response.statusCode() + " " + body);
         }
         String body = response.body();
         OllamaChatResponse resp = MAPPER.readValue(body, OllamaChatResponse.class);

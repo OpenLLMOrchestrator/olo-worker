@@ -56,14 +56,14 @@ final class PlannerCreatorSteps {
                     UUID.randomUUID().toString(),
                     "step-" + i + "-" + pluginRef,
                     NodeType.PLUGIN,
-                    List.of(),
+                    List.<ExecutionTreeNode>of(),
                     "PLUGIN",
                     pluginRef,
                     inputMappings,
                     outputMappings,
                     emptyStrList, emptyStrList, emptyStrList, emptyStrList, emptyStrList, emptyStrList, emptyStrList, emptyStrList,
-                    Map.of(),
-                    null, null, null
+                    Map.<String, Object>of(),
+                    null, null, null, null
             );
             nodes.add(nodeFeatureEnricher.enrich(child, featureContext));
         }

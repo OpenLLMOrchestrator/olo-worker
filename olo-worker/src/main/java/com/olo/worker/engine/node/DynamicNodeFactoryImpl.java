@@ -101,28 +101,28 @@ public final class DynamicNodeFactoryImpl implements com.olo.node.DynamicNodeFac
                         id,
                         displayName,
                         NodeType.PLANNER,
-                        List.of(),
+                        List.<ExecutionTreeNode>of(),
                         "PLANNER",
                         spec.pluginRef(),
                         spec.inputMappings(),
                         spec.outputMappings(),
                         EMPTY_FEATURES, EMPTY_FEATURES, EMPTY_FEATURES, EMPTY_FEATURES, EMPTY_FEATURES, EMPTY_FEATURES, EMPTY_FEATURES, EMPTY_FEATURES,
-                        spec.params() != null && !spec.params().isEmpty() ? spec.params() : Map.of(),
-                        null, null, null
+                        spec.params() != null && !spec.params().isEmpty() ? spec.params() : Map.<String, Object>of(),
+                        null, null, null, null
                 );
             } else {
                 raw = new ExecutionTreeNode(
                         id,
                         displayName,
                         NodeType.PLUGIN,
-                        List.of(),
+                        List.<ExecutionTreeNode>of(),
                         "PLUGIN",
                         spec.pluginRef(),
                         spec.inputMappings(),
                         spec.outputMappings(),
                         EMPTY_FEATURES, EMPTY_FEATURES, EMPTY_FEATURES, EMPTY_FEATURES, EMPTY_FEATURES, EMPTY_FEATURES, EMPTY_FEATURES, EMPTY_FEATURES,
-                        Map.of(),
-                        null, null, null
+                        Map.<String, Object>of(),
+                        null, null, null, null
                 );
             }
             ExecutionTreeNode enriched = pipelineFeatureContext != null

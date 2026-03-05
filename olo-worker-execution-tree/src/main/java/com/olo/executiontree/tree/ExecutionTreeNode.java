@@ -21,6 +21,11 @@ public final class ExecutionTreeNode {
     private final String displayName;
     private final NodeType type;
     private final List<ExecutionTreeNode> children;
+    /**
+     * Legacy/auxiliary string label that historically duplicated {@link #type}.
+     * Kept only for backward-compatible JSON deserialization; not used for dispatch.
+     */
+    @Deprecated
     private final String nodeType;
     private final String pluginRef;
     private final List<ParameterMapping> inputMappings;
@@ -37,6 +42,8 @@ public final class ExecutionTreeNode {
     private final Integer scheduleToStartSeconds;
     private final Integer startToCloseSeconds;
     private final Integer scheduleToCloseSeconds;
+    /** Optional override for plugin execution mode (e.g. WORKFLOW, ACTIVITY). */
+    private final String executionMode;
 
     @JsonCreator
     public ExecutionTreeNode(
@@ -59,7 +66,8 @@ public final class ExecutionTreeNode {
             @JsonProperty("params") Map<String, Object> params,
             @JsonProperty("scheduleToStartSeconds") Integer scheduleToStartSeconds,
             @JsonProperty("startToCloseSeconds") Integer startToCloseSeconds,
-            @JsonProperty("scheduleToCloseSeconds") Integer scheduleToCloseSeconds) {
+            @JsonProperty("scheduleToCloseSeconds") Integer scheduleToCloseSeconds,
+            @JsonProperty("executionMode") String executionMode) {
         this.id = id;
         this.displayName = displayName;
         this.type = type != null ? type : NodeType.UNKNOWN;
@@ -80,6 +88,7 @@ public final class ExecutionTreeNode {
         this.scheduleToStartSeconds = scheduleToStartSeconds;
         this.startToCloseSeconds = startToCloseSeconds;
         this.scheduleToCloseSeconds = scheduleToCloseSeconds;
+        this.executionMode = executionMode;
     }
 
     public String getId() {
@@ -136,7 +145,8 @@ public final class ExecutionTreeNode {
                 node.params,
                 node.scheduleToStartSeconds,
                 node.startToCloseSeconds,
-                node.scheduleToCloseSeconds
+                node.scheduleToCloseSeconds,
+                node.executionMode
         );
     }
 
@@ -170,7 +180,8 @@ public final class ExecutionTreeNode {
                 node.params,
                 node.scheduleToStartSeconds,
                 node.startToCloseSeconds,
-                node.scheduleToCloseSeconds
+                node.scheduleToCloseSeconds,
+                node.executionMode
         );
     }
 
@@ -201,7 +212,8 @@ public final class ExecutionTreeNode {
                 node.params,
                 node.scheduleToStartSeconds,
                 node.startToCloseSeconds,
-                node.scheduleToCloseSeconds
+                node.scheduleToCloseSeconds,
+                node.executionMode
         );
     }
 
@@ -224,6 +236,11 @@ public final class ExecutionTreeNode {
         return children;
     }
 
+    /**
+     * Legacy/auxiliary string label that historically duplicated {@link #getType()}.
+     * Prefer {@link #getType()} in all new code; this is kept only for backward compatibility.
+     */
+    @Deprecated
     public String getNodeType() {
         return nodeType;
     }
@@ -298,6 +315,14 @@ public final class ExecutionTreeNode {
     /** Optional: schedule-to-close timeout in seconds for this node. Resolved at bootstrap: current → parent → global default. */
     public Integer getScheduleToCloseSeconds() {
         return scheduleToCloseSeconds;
+    }
+
+    /**
+     * Optional override for plugin execution mode for this node (e.g. "WORKFLOW", "ACTIVITY").
+     * If null, the plugin's own {@code executionMode()} is used by the runtime.
+     */
+    public String getExecutionMode() {
+        return executionMode;
     }
 
     @Override

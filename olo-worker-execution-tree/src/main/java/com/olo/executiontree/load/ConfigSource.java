@@ -19,7 +19,7 @@ public interface ConfigSource {
     /**
      * Gets configuration JSON from the database by queue name and version.
      *
-     * @param queueName task queue name (e.g. chat-queue-oolama)
+     * @param queueName task queue name (e.g. chat-queue-ollama)
      * @param version   config version (e.g. 1.0)
      * @return configuration JSON if present
      */

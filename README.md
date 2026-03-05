@@ -2,6 +2,37 @@
 
 Java Gradle application that runs a Temporal worker with task queues and infrastructure config read from environment variables.
 
+## What is OLO?
+
+**OLO is AI runtime infrastructure, not an agent library.** It sits below agent frameworks and above Temporal and infrastructure:
+
+```
+Applications
+(Chat, Agents, AI Apps)
+        │
+        ▼
+Agent Frameworks
+(LangChain, CrewAI, etc.)
+        │
+        ▼
+OLO Runtime
+ ├ Execution Kernel
+ ├ Feature System
+ ├ Plugin System
+ ├ Connection Runtime
+ ├ Secret System
+ └ Event System
+        │
+        ▼
+Temporal Workflow Engine
+        │
+        ▼
+Infrastructure
+(DB, Redis, Vault, APIs)
+```
+
+Agent frameworks (LangChain, CrewAI, etc.) can run on top of OLO. OLO provides the **Execution Kernel** (declarative pipelines, Execution Tree), **Feature System** (logging, quota, metrics, ledger), **Plugin System** (LLM, tools, DB), **Connection Runtime**, **Secret System**, and **Event System**—all on top of Temporal and your infrastructure. See [Olo Runtime Architecture](#olo-runtime-architecture) and [docs/](docs/README.md) for details.
+
 ## Requirements
 
 - Java 17+
@@ -11,8 +42,8 @@ Java Gradle application that runs a Temporal worker with task queues and infrast
 
 | Variable | Description | Example |
 |----------|-------------|---------|
-| `OLO_QUEUE` | Comma-separated Temporal task queue names | `olo-chat-queue-oolama,olo-rag-queue-openai` |
-| `OLO_IS_DEBUG_ENABLED` | If `true`, also poll `&lt;queue&gt;-debug` for each queue (e.g. olo-chat-queue-oolama-debug) | `true` |
+| `OLO_QUEUE` | Comma-separated Temporal task queue names | `olo-chat-queue-ollama,olo-rag-queue-openai` |
+| `OLO_IS_DEBUG_ENABLED` | If `true`, also poll `&lt;queue&gt;-debug` for each queue (e.g. olo-chat-queue-ollama-debug) | `true` |
 | `OLO_CACHE_HOST` | Cache host (e.g. Redis) | `localhost` |
 | `OLO_CACHE_PORT` | Cache port | `6379` |
 | `OLO_DB_HOST` | Database host | `localhost` |
@@ -25,11 +56,11 @@ Java Gradle application that runs a Temporal worker with task queues and infrast
 
 Temporal connection (target and namespace) is taken from **pipeline configuration** (`executionDefaults.temporal.target` and `executionDefaults.temporal.namespace` in your pipeline config JSON), not from environment variables.
 
-With `OLO_QUEUE=olo-chat-queue-oolama,olo-rag-queue-openai` and `OLO_IS_DEBUG_ENABLED=true`, the worker registers:
+With `OLO_QUEUE=olo-chat-queue-ollama,olo-rag-queue-openai` and `OLO_IS_DEBUG_ENABLED=true`, the worker registers:
 
-- `olo-chat-queue-oolama`
+- `olo-chat-queue-ollama`
 - `olo-rag-queue-openai`
-- `olo-chat-queue-oolama-debug`
+- `olo-chat-queue-ollama-debug`
 - `olo-rag-queue-openai-debug`
 
 ## Build and run
@@ -53,7 +84,7 @@ Then (run the **worker** module):
 With env vars (Windows PowerShell):
 
 ```powershell
-$env:OLO_QUEUE = "olo-chat-queue-oolama,olo-rag-queue-openai"
+$env:OLO_QUEUE = "olo-chat-queue-ollama,olo-rag-queue-openai"
 $env:OLO_IS_DEBUG_ENABLED = "true"
 $env:OLO_CACHE_HOST = "localhost"
 $env:OLO_CACHE_PORT = "6379"
@@ -65,7 +96,7 @@ $env:OLO_DB_PORT = "5432"
 With env vars (Linux/macOS):
 
 ```bash
-export OLO_QUEUE="olo-chat-queue-oolama,olo-rag-queue-openai"
+export OLO_QUEUE="olo-chat-queue-ollama,olo-rag-queue-openai"
 export OLO_IS_DEBUG_ENABLED=true
 export OLO_CACHE_HOST=localhost
 export OLO_CACHE_PORT=6379
@@ -85,7 +116,7 @@ docker build -t olo-worker:latest .
 Run the worker (pass env vars and ensure the container can reach Temporal, Redis, DB as needed):
 
 ```bash
-docker run --rm -e OLO_QUEUE=olo-chat-queue-oolama -e OLO_IS_DEBUG_ENABLED=true \
+docker run --rm -e OLO_QUEUE=olo-chat-queue-ollama -e OLO_IS_DEBUG_ENABLED=true \
   -e OLO_CACHE_HOST=host.docker.internal -e OLO_CACHE_PORT=6379 \
   -e OLO_TENANT_IDS=default \
   olo-worker:latest
@@ -117,6 +148,107 @@ Pipeline config is included in the image under `/app/config`. Temporal target/na
 Additional modules (see [docs/architecture-and-features.md](docs/architecture-and-features.md)): olo-worker-tools, olo-join-reducer, olo-internal-plugins, olo-internal-tools, olo-planner, olo-planner-a, and various **olo-plugin-*** / **olo-tool-*** modules.
 
 See [docs/architecture-and-features.md](docs/architecture-and-features.md) for the full module map and data flow.
+
+## Olo Runtime Architecture
+
+A simplified view of how a pipeline run flows:
+
+```
+Pipeline Config  →  Execution Tree  →  Execution Engine  →  Plugins
+```
+
+From a pipeline step to the external API (resource resolution):
+
+```
+Pipeline Step
+     │
+     ▼
+ctx.model("openai-prod")
+     │
+     ▼
+ResourceRuntimeManager
+     │
+     ▼
+Runtime Cache
+     │
+     ▼
+Plugin.createRuntime()
+     │
+     ▼
+OpenAI API
+```
+
+The **Execution Tree** is the declarative program (SEQUENCE, IF, PLUGIN, SWITCH, …). The **Execution Engine** interprets it. **Plugins** provide capabilities (LLM, tools, DB); **Features** wrap every node (logging, quota, metrics, ledger). Full stack:
+
+```
+                     ┌───────────────────────────────────────┐
+                     │               USER / API               │
+                     │  Chat UI • REST API • SDK • CLI       │
+                     └───────────────────────────────────────┘
+                                      │
+                                      ▼
+                     ┌───────────────────────────────────────┐
+                     │            OLO WORKFLOW                │
+                     │  Temporal Workflow Orchestrator       │
+                     │                                       │
+                     │  • start pipeline run                 │
+                     │  • manage retries / timeouts          │
+                     │  • schedule activities                │
+                     └───────────────────────────────────────┘
+                                      │
+                                      ▼
+                     ┌───────────────────────────────────────┐
+                     │            EXECUTION ENGINE            │
+                     │                                       │
+                     │  ExecutionEngine                      │
+                     │  NodeExecutor                        │
+                     │  ResultMapper                        │
+                     │                                       │
+                     │  Interprets the execution tree        │
+                     └───────────────────────────────────────┘
+                                      │
+                                      ▼
+              ┌───────────────────────────────────────────────┐
+              │              EXECUTION TREE                    │
+              │                                               │
+              │  Declarative pipeline program                 │
+              │                                               │
+              │  SEQUENCE → IF → PLUGIN → SWITCH → JOIN      │
+              │                                               │
+              │  Each node: id, type, params, feature hooks   │
+              └───────────────────────────────────────────────┘
+                        │                       │
+                        ▼                       ▼
+        ┌──────────────────────────┐   ┌──────────────────────────┐
+        │        FEATURES           │   │         VARIABLES         │
+        │  Logging • Quotas •       │   │  VariableEngine           │
+        │  Metrics • Ledger •       │   │  IN / INTERNAL / OUT       │
+        │  Execution Events         │   │  inputMappings /           │
+        │  (run around every node)  │   │  outputMappings /         │
+        └──────────────────────────┘   │  resultMapping            │
+                        │              └──────────────────────────┘
+                        ▼
+             ┌──────────────────────────────┐
+             │           PLUGINS            │
+             │  LLM • tools • databases     │
+             │  pluginRef → PluginRegistry  │
+             └──────────────────────────────┘
+                        │
+                        ▼
+           ┌──────────────────────────────────┐
+           │    TENANT INFRASTRUCTURE         │
+           │  Connection Manager • Secrets   │
+           │  Config snapshot • Queue routing │
+           └──────────────────────────────────┘
+                        │
+                        ▼
+             ┌──────────────────────────────┐
+             │          RUN LEDGER          │
+             │  run / node / events         │
+             └──────────────────────────────┘
+```
+
+**Three concepts:** (1) **Execution Tree = the program** — the pipeline config is a declarative program; the Execution Engine is the interpreter. (2) **Plugins = capabilities** — the tree decides *what* runs; plugins do the *work*. (3) **Features = cross-cutting behavior** — they wrap node execution (pre → node → post) for logging, quota, metrics, ledger, and events without polluting pipeline logic. For details see [docs/](docs/README.md) and [architecture-and-features](docs/arcitecture/architecture-and-features.md).
 
 ## License
 

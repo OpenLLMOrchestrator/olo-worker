@@ -4,7 +4,7 @@ import java.util.Objects;
 
 /**
  * Builds the Redis/cache key for pipeline configuration.
- * Example: {@code olo:engine:config:olo-chat-queue-oolama:1.0} when queueId is {@code olo-chat-queue-oolama} and version is {@code 1.0}.
+ * Example: {@code olo:engine:config:olo-chat-queue-ollama:1.0} when queueId is {@code olo-chat-queue-ollama} and version is {@code 1.0}.
  * The queueId can be the task queue name or a prefixed form (e.g. olo- + queue name).
  */
 public final class ConfigKeyBuilder {
@@ -24,9 +24,9 @@ public final class ConfigKeyBuilder {
     /**
      * Full Redis key for the given queue and version.
      *
-     * @param queueId queue identifier (e.g. task queue name or prefixed like olo-chat-queue-oolama)
+     * @param queueId queue identifier (e.g. task queue name or prefixed like olo-chat-queue-ollama)
      * @param version version string (e.g. 1.0)
-     * @return key e.g. olo:engine:config:olo-chat-queue-oolama:1.0
+     * @return key e.g. olo:engine:config:olo-chat-queue-ollama:1.0
      */
     public String redisKey(String queueId, String version) {
         String q = queueId != null ? queueId : "";

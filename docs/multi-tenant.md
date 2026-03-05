@@ -9,7 +9,7 @@ Session, pipeline config, and quota keys use the **tenant-first** pattern `<tena
 | Use | Key pattern | Example |
 |-----|-------------|---------|
 | Session (workflow input) | `<tenantId>:olo:kernel:sessions:<transactionId>:USERINPUT` | `acme:olo:kernel:sessions:tx-1:USERINPUT` |
-| Pipeline config | `<tenantId>:olo:kernel:config:<queueName>:<version>` | `acme:olo:kernel:config:olo-chat-queue-oolama:1.0` |
+| Pipeline config | `<tenantId>:olo:kernel:config:<queueName>:<version>` | `acme:olo:kernel:config:olo-chat-queue-ollama:1.0` |
 | **Active workflow count** (quota) | `<tenantId>:olo:quota:activeWorkflows` | `acme:olo:quota:activeWorkflows` (Redis INCR on run start, DECR on run end) |
 | Input cache (CACHE storage) | `olo:<tenantId>:worker:<transactionId>:input:<inputName>` | `olo:acme:worker:tx-1:input:userQuery` |
 | **Tenant list** (bootstrap) | `olo:tenants` | JSON array of `{"id":"...","name":"...","config":{...}}`; if present, used instead of OLO_TENANT_IDS; optional `config` is tenant-specific (plugins, features, restrictions) |

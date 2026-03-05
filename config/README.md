@@ -12,7 +12,7 @@ Configuration files in this folder are **pipeline configurations** (see [Pipelin
 | File | Use when |
 |------|----------|
 | `default.json` | No queue-specific config or as fallback. |
-| `olo-chat-queue-oolama.json` | Task queue is `olo-chat-queue-oolama`. |
+| `olo-chat-queue-ollama.json` | Task queue is `olo-chat-queue-ollama`. |
 | `olo-rag-queue-openai.json` | Task queue is `olo-rag-queue-openai`. |
 
-Load the config for the current queue by name (e.g. `config/olo-chat-queue-oolama.json`), or use `config/default.json` when the queue has no dedicated file.
+Load the config for the current queue by name (e.g. `config/olo-chat-queue-ollama.json`), or use `config/default.json` when the queue has no dedicated file.

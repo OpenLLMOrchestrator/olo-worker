@@ -65,7 +65,7 @@ class ConfigurationLoaderTest {
         ConfigurationLoader loader = new ConfigurationLoader(
                 EMPTY_SOURCE, configDir, 0, "olo:engine:config");
 
-        PipelineConfiguration config = loader.loadConfiguration("default", "chat-queue-oolama", "1.0");
+        PipelineConfiguration config = loader.loadConfiguration("default", "chat-queue-ollama", "1.0");
 
         assertNotNull(config);
         assertEquals("1.0.0", config.getVersion());
@@ -90,7 +90,7 @@ class ConfigurationLoaderTest {
     void loadAllQueuesAndPopulateContext_storesReadOnlyCopyInGlobalContext() throws Exception {
         Files.writeString(configDir.resolve("default.json"), MINIMAL_DEFAULT_JSON);
         ConfigSource source = EMPTY_SOURCE;
-        List<String> queues = List.of("olo-chat-queue-oolama");
+        List<String> queues = List.of("olo-chat-queue-ollama");
         String version = "1.0";
         int retrySeconds = 0;
         String prefix = "olo:engine:config";
@@ -99,14 +99,14 @@ class ConfigurationLoaderTest {
         GlobalConfigurationContext.loadAllQueuesAndPopulateContext(
                 tenant, queues, version, source, configDir, retrySeconds, prefix);
 
-        GlobalContext ctx = GlobalConfigurationContext.get(tenant, "olo-chat-queue-oolama");
+        GlobalContext ctx = GlobalConfigurationContext.get(tenant, "olo-chat-queue-ollama");
         assertNotNull(ctx);
-        assertEquals("olo-chat-queue-oolama", ctx.getQueueName());
+        assertEquals("olo-chat-queue-ollama", ctx.getQueueName());
         PipelineConfiguration cfg = ctx.getConfiguration();
         assertNotNull(cfg);
         assertEquals("1.0.0", cfg.getVersion());
         assertTrue(GlobalConfigurationContext.getContextByTenantAndQueue().containsKey(tenant));
-        assertTrue(GlobalConfigurationContext.getContextByTenantAndQueue().get(tenant).containsKey("olo-chat-queue-oolama"));
+        assertTrue(GlobalConfigurationContext.getContextByTenantAndQueue().get(tenant).containsKey("olo-chat-queue-ollama"));
     }
 
     @Test

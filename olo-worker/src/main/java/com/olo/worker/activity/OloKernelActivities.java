@@ -40,7 +40,7 @@ public interface OloKernelActivities {
      * PLUGIN → pre features, execute plugin, post features), then applies resultMapping to produce
      * the workflow result. Returns the result as a string (e.g. the single output "answer" for chat).
      *
-     * @param queueName         pipeline/task queue name (e.g. olo-chat-queue-oolama or olo-chat-queue-oolama-debug)
+     * @param queueName         pipeline/task queue name (e.g. olo-chat-queue-ollama or olo-chat-queue-ollama-debug)
      * @param workflowInputJson workflow input JSON (for variable resolution and session)
      * @return workflow result string (e.g. final answer for chat flow)
      */

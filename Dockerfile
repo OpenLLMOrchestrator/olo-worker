@@ -28,7 +28,7 @@ COPY config config
 RUN chmod +x /app/bin/olo-worker
 
 # Default env vars (override at run time)
-ENV OLO_QUEUE=olo-chat-queue-oolama
+ENV OLO_QUEUE=olo-chat-queue-ollama
 ENV OLO_IS_DEBUG_ENABLED=false
 ENV OLO_TENANT_IDS=default
 ENV OLO_DEFAULT_TENANT_ID=default

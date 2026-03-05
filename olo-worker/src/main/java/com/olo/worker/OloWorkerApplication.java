@@ -51,8 +51,24 @@ public final class OloWorkerApplication {
         }
         OloSessionCache sessionCache = (OloSessionCache) ctx.getSessionCache();
 
-        String temporalTarget = ctx.getTemporalTargetOrDefault("localhost:7233");
-        String temporalNamespace = ctx.getTemporalNamespaceOrDefault("default");
+        // Allow env override for local dev (e.g. OLO_TEMPORAL_TARGET=localhost:7233 when config has temporal:7233)
+        String temporalTarget = System.getenv("OLO_TEMPORAL_TARGET");
+        if (temporalTarget == null || temporalTarget.isBlank()) {
+            temporalTarget = ctx.getTemporalTargetOrDefault("localhost:7233");
+            // When config points at Docker hostname "temporal", use localhost for local runs (e.g. gradlew :olo-worker:run)
+            if ("temporal".equals(temporalTarget) || "temporal:7233".equalsIgnoreCase(temporalTarget)) {
+                temporalTarget = "localhost:7233";
+                log.info("Temporal target was 'temporal' or 'temporal:7233'; using localhost:7233 for local development.");
+            }
+        } else {
+            temporalTarget = temporalTarget.trim();
+        }
+        String temporalNamespace = System.getenv("OLO_TEMPORAL_NAMESPACE");
+        if (temporalNamespace == null || temporalNamespace.isBlank()) {
+            temporalNamespace = ctx.getTemporalNamespaceOrDefault("default");
+        } else {
+            temporalNamespace = temporalNamespace.trim();
+        }
         WorkflowServiceStubs service = WorkflowServiceStubs.newServiceStubs(
                 WorkflowServiceStubsOptions.newBuilder()
                         .setTarget(temporalTarget)

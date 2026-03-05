@@ -1,6 +1,6 @@
 # olo-plugin-ollama
 
-Ollama model-executor plugin for the OLO worker. Calls the Ollama API to get AI model responses and registers as a `ModelExecutorPlugin` (e.g. under id `GPT4_EXECUTOR` for use with `olo-chat-queue-oolama`).
+Ollama model-executor plugin for the OLO worker. Calls the Ollama API to get AI model responses and registers as a `ModelExecutorPlugin` (e.g. under id `GPT4_EXECUTOR` for use with `olo-chat-queue-ollama`).
 
 ## Contract
 
@@ -15,7 +15,7 @@ Ollama model-executor plugin for the OLO worker. Calls the Ollama API to get AI 
 
 ## Registration
 
-The olo-worker application registers this plugin at startup under id `GPT4_EXECUTOR` so pipeline configs that reference `pluginRef: "GPT4_EXECUTOR"` (e.g. `config/olo-chat-queue-oolama.json`) use Ollama.
+The olo-worker application registers this plugin at startup under id `GPT4_EXECUTOR` so pipeline configs that reference `pluginRef: "GPT4_EXECUTOR"` (e.g. `config/olo-chat-queue-ollama.json`) use Ollama.
 
 Programmatic registration:
 
@@ -29,3 +29,8 @@ plugin.register("GPT4_EXECUTOR");
 ## Requirements
 
 - Ollama running (e.g. `ollama serve`) with the chosen model pulled (e.g. `ollama pull llama3.2`).
+
+## Local run vs Docker
+
+- **Local:** Default `OLLAMA_BASE_URL` is `http://localhost:11434`. Have Ollama on the host and pull the model: `ollama pull llama3.2` (or set `OLLAMA_MODEL` to a model you have).
+- **Docker/stack:** Set `OLLAMA_BASE_URL=http://ollama:11434` so the worker can reach the Ollama service.

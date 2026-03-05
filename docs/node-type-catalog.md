@@ -1,6 +1,6 @@
 # Execution tree node type catalog
 
-This document defines the node types supported by the execution engine. In code, the node **type** field is represented by the **`NodeType`** enum in `olo-worker-execution-tree` (`com.olo.executiontree.tree.NodeType`). JSON config uses the enum name as string (e.g. `"type": "SEQUENCE"`); unknown values deserialize as `UNKNOWN`.
+This document defines the node types supported by the execution engine. For a higher-level design (tree structure, execution flow, variable model, integration), see [execution-tree-design.md](execution-tree-design.md). In code, the node **type** field is represented by the **`NodeType`** enum in `olo-worker-execution-tree` (`com.olo.executiontree.tree.NodeType`). JSON config uses the enum name as string (e.g. `"type": "SEQUENCE"`); unknown values deserialize as `UNKNOWN`.
 
 - **Phase 1 (Must Have):** SEQUENCE, PLUGIN, IF, SWITCH/CASE, ITERATOR, FORK, JOIN, GROUP — **implemented**.
 - **Phase 2 (Enterprise Ready):** TRY_CATCH, RETRY, SUB_PIPELINE, EVENT_WAIT — **implemented**.

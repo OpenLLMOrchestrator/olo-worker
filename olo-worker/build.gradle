@@ -40,7 +40,7 @@ application {
     mainClass = 'com.olo.worker.OloWorkerApplication'
 }
 
-// So that Path.of("config") finds repo root's config/ (default.json, olo-chat-queue-oolama.json, etc.)
+// So that Path.of("config") finds repo root's config/ (default.json, olo-chat-queue-ollama.json, etc.)
 tasks.named('run') {
     workingDir = rootProject.projectDir
 }

@@ -73,7 +73,7 @@ public final class ConfigurationLoader {
      * Redis key uses tenant-scoped prefix (olo:&lt;tenantId&gt;:...); DB lookup uses tenant_id.
      *
      * @param tenantKey tenant id (for Redis key prefix and DB)
-     * @param queueName task queue name (e.g. olo-chat-queue-oolama or olo-chat-queue-oolama-debug)
+     * @param queueName task queue name (e.g. olo-chat-queue-ollama or olo-chat-queue-ollama-debug)
      * @param version   config version (e.g. 1.0)
      * @return valid pipeline configuration (never null)
      */

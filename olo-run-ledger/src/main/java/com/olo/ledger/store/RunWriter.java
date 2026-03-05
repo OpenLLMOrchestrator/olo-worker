@@ -17,11 +17,34 @@ public final class RunWriter {
     private static final String TABLE_NODE = "olo_run_node";
     private static final String STATUS_RUNNING = "RUNNING";
     private static final String STATUS_FAILED = "FAILED";
+    /** Placeholder tenant_id when ensuring run row for FK; schema requires NOT NULL. */
+    private static final String UNKNOWN_TENANT_ID = "00000000-0000-0000-0000-000000000000";
     private static final Logger log = LoggerFactory.getLogger(RunWriter.class);
+
+    /**
+     * Ensures a row exists in olo_run for the given run_id so node inserts (FK) succeed.
+     * Used when a node activity runs before the activity that called runStarted (e.g. parallel or out-of-order execution).
+     * No-op if the row already exists (INSERT ... ON CONFLICT DO NOTHING).
+     */
+    public void ensureRunExists(Connection c, String runId, String tenantId, long startTimeMillis) throws SQLException {
+        String effectiveTenantId = (tenantId != null && !tenantId.isBlank()) ? tenantId : UNKNOWN_TENANT_ID;
+        String sql = "INSERT INTO " + TABLE_RUN + " (run_id, tenant_id, tenant_name, pipeline, input_json, start_time, status) VALUES (?,?,?,?,?::jsonb,?,?) ON CONFLICT (run_id) DO NOTHING";
+        try (PreparedStatement ps = c.prepareStatement(sql)) {
+            ps.setObject(1, LedgerSqlUtils.toUuid(runId));
+            ps.setObject(2, LedgerSqlUtils.toUuid(effectiveTenantId));
+            ps.setString(3, LedgerSqlUtils.toName(effectiveTenantId, LedgerSqlUtils.NAME_MAX_LEN));
+            ps.setString(4, "");
+            ps.setString(5, "{}");
+            ps.setTimestamp(6, new Timestamp(startTimeMillis));
+            ps.setString(7, STATUS_RUNNING);
+            ps.executeUpdate();
+        }
+    }
 
     public void runStarted(Connection c, String runId, String tenantId, String pipeline,
                            String inputJson, long startTimeMillis) throws SQLException {
-        String sql = "INSERT INTO " + TABLE_RUN + " (run_id, tenant_id, tenant_name, pipeline, input_json, start_time, status) VALUES (?,?,?,?,?::jsonb,?,?)";
+        String sql = "INSERT INTO " + TABLE_RUN + " (run_id, tenant_id, tenant_name, pipeline, input_json, start_time, status) VALUES (?,?,?,?,?::jsonb,?,?) "
+                + "ON CONFLICT (run_id) DO UPDATE SET tenant_id=EXCLUDED.tenant_id, tenant_name=EXCLUDED.tenant_name, pipeline=EXCLUDED.pipeline, input_json=EXCLUDED.input_json, start_time=EXCLUDED.start_time, status=EXCLUDED.status";
         try (PreparedStatement ps = c.prepareStatement(sql)) {
             ps.setObject(1, LedgerSqlUtils.toUuid(runId));
             ps.setObject(2, LedgerSqlUtils.toUuid(tenantId));

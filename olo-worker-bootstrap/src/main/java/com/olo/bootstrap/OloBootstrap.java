@@ -60,7 +60,7 @@ public final class OloBootstrap {
         OloConfig config = OloConfig.fromEnvironment();
         List<String> taskQueues = config.getTaskQueues();
         if (taskQueues.isEmpty()) {
-            log.error("No task queues configured. Set OLO_QUEUE (e.g. OLO_QUEUE=olo-chat-queue-oolama,olo-rag-queue-openai)");
+            log.error("No task queues configured. Set OLO_QUEUE (e.g. OLO_QUEUE=olo-chat-queue-ollama,olo-rag-queue-openai)");
             System.exit(1);
         }
         Path configDir = Path.of(config.getPipelineConfigDir());

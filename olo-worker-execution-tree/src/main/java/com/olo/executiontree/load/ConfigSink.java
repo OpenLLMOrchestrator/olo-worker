@@ -19,7 +19,7 @@ public interface ConfigSink {
     /**
      * Writes configuration JSON to the database for the given queue and version.
      *
-     * @param queueName task queue name (e.g. chat-queue-oolama)
+     * @param queueName task queue name (e.g. chat-queue-ollama)
      * @param version   config version (e.g. 1.0)
      * @param json      pipeline configuration JSON
      */

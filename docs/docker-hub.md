@@ -53,7 +53,7 @@ Temporal worker for the **Open LLM Orchestrator (OLO)** platform. Polls task que
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `OLO_QUEUE` | Comma-separated task queue names | `olo-chat-queue-oolama` |
+| `OLO_QUEUE` | Comma-separated task queue names | `olo-chat-queue-ollama` |
 | `OLO_TENANT_IDS` | Comma-separated tenant IDs | `default` |
 | `OLO_DEFAULT_TENANT_ID` | Default tenant | `default` |
 | `OLO_RUN_LEDGER` | Enable run/node ledger persistence | `false` |
@@ -66,7 +66,7 @@ See the [OLO Worker documentation](https://github.com/OpenLLMOrchestrator/olo-wo
 Run the worker and point it at your Temporal server (e.g. host or another container):
 
 ```bash
-docker run -e OLO_QUEUE=olo-chat-queue-oolama \
+docker run -e OLO_QUEUE=olo-chat-queue-ollama \
   -e TEMPORAL_HOST=host.docker.internal:7233 \
   ghcr.io/openllmorchestrator/olo-worker:latest
 ```
@@ -74,7 +74,7 @@ docker run -e OLO_QUEUE=olo-chat-queue-oolama \
 Or with Docker Hub image:
 
 ```bash
-docker run -e OLO_QUEUE=olo-chat-queue-oolama \
+docker run -e OLO_QUEUE=olo-chat-queue-ollama \
   -e TEMPORAL_HOST=host.docker.internal:7233 \
   <your-dockerhub-username>/olo-worker:latest
 ```

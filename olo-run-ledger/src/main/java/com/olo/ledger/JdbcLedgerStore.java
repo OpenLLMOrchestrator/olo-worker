@@ -125,6 +125,7 @@ public final class JdbcLedgerStore implements LedgerStore {
     public void nodeStarted(String runId, String tenantId, String nodeId, String nodeType, String inputSnapshotJson, long startTimeMillis,
                             String parentNodeId, Integer executionOrder, Integer depth) {
         try (Connection c = connection()) {
+            runWriter.ensureRunExists(c, runId, tenantId, startTimeMillis);
             nodeWriter.nodeStarted(c, runId, tenantId, nodeId, nodeType, inputSnapshotJson, startTimeMillis, parentNodeId, executionOrder, depth);
         } catch (SQLException e) {
             log.error("Ledger persist failed: nodeStarted runId={} nodeId={} nodeType={} error={} SQLState={}", runId, nodeId, nodeType, e.getMessage(), e.getSQLState(), e);

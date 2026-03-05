@@ -97,8 +97,8 @@ final class NodeExecutionStepUtils {
             }
         }
         List<String> empty = List.of();
-        return new ExecutionTreeNode(id, displayName, NodeType.PLUGIN, List.of(), "PLUGIN", pluginRef,
+        return new ExecutionTreeNode(id, displayName, NodeType.PLUGIN, List.<ExecutionTreeNode>of(), "PLUGIN", pluginRef,
                 inputMappings, outputMappings, features.isEmpty() ? empty : features, empty, empty, empty, empty, empty, empty, empty,
-                Map.of(), null, null, null);
+                Map.<String, Object>of(), null, null, null, null);
     }
 }

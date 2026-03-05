@@ -29,9 +29,9 @@
   "pluginRestrictions": [],
   "featureRestrictions": [],
   "pipelines": {
-    "olo-chat-queue-oolama": {
-      "name": "olo-chat-queue-oolama",
-      "workflowId": "olo-chat-queue-oolama",
+    "olo-chat-queue-ollama": {
+      "name": "olo-chat-queue-ollama",
+      "workflowId": "olo-chat-queue-ollama",
       "inputContract": {
         "strict": true,
         "parameters": [

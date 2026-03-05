@@ -4,6 +4,111 @@ This document describes the architecture of the OLO Temporal worker and all feat
 
 ---
 
+## Olo Runtime Stack
+
+**Simplified:** Pipeline Config → Execution Tree → Execution Engine → Plugins.
+
+Full stack (how Temporal, the Execution Engine, Execution Tree, Features, Variables, and Plugins fit together):
+
+```
+                     ┌───────────────────────────────────────┐
+                     │               USER / API               │
+                     │  Chat UI • REST API • SDK • CLI       │
+                     └───────────────────────────────────────┘
+                                      │
+                                      ▼
+                     ┌───────────────────────────────────────┐
+                     │            OLO WORKFLOW                │
+                     │  Temporal Workflow Orchestrator       │
+                     │                                       │
+                     │  • start pipeline run                 │
+                     │  • manage retries / timeouts          │
+                     │  • schedule activities                │
+                     └───────────────────────────────────────┘
+                                      │
+                                      ▼
+                     ┌───────────────────────────────────────┐
+                     │            EXECUTION ENGINE            │
+                     │                                       │
+                     │  ExecutionEngine                      │
+                     │  NodeExecutor                         │
+                     │  ResultMapper                         │
+                     │                                       │
+                     │  Interprets the execution tree        │
+                     └───────────────────────────────────────┘
+                                      │
+                                      ▼
+              ┌───────────────────────────────────────────────┐
+              │              EXECUTION TREE                    │
+              │                                               │
+              │  Declarative pipeline program                 │
+              │                                               │
+              │  SEQUENCE → IF → PLUGIN → SWITCH → JOIN      │
+              │                                               │
+              │  Each node contains:                          │
+              │  • id                                         │
+              │  • type                                       │
+              │  • params                                     │
+              │  • feature hooks                              │
+              └───────────────────────────────────────────────┘
+                        │                       │
+                        ▼                       ▼
+        ┌──────────────────────────┐   ┌──────────────────────────┐
+        │        FEATURES          │   │         VARIABLES         │
+        │                          │   │                           │
+        │ Cross-cutting behavior   │   │ VariableEngine            │
+        │                          │   │                           │
+        │ • Logging                │   │ IN / INTERNAL / OUT       │
+        │ • Quotas                 │   │                           │
+        │ • Metrics                │   │ inputMappings             │
+        │ • Ledger                 │   │ outputMappings            │
+        │ • Execution Events       │   │ resultMapping             │
+        │                          │   │                           │
+        │ Run around every node    │   │ Data flow across nodes    │
+        └──────────────────────────┘   └──────────────────────────┘
+                        │
+                        ▼
+             ┌──────────────────────────────┐
+             │           PLUGINS            │
+             │                              │
+             │ External capability layer    │
+             │                              │
+             │ • LLM providers              │
+             │ • tools / APIs               │
+             │ • databases                  │
+             │ • custom enterprise logic   │
+             │                              │
+             │ pluginRef → PluginRegistry   │
+             └──────────────────────────────┘
+                        │
+                        ▼
+           ┌──────────────────────────────────┐
+           │         TENANT INFRASTRUCTURE    │
+           │                                  │
+           │ • Connection Manager (future)   │
+           │ • Secret providers               │
+           │ • Config snapshot                │
+           │ • Queue routing                  │
+           │                                  │
+           └──────────────────────────────────┘
+                        │
+                        ▼
+             ┌──────────────────────────────┐
+             │          RUN LEDGER          │
+             │                              │
+             │ Observability & debugging    │
+             │                              │
+             │ • run table                  │
+             │ • node table                 │
+             │ • execution events           │
+             │                              │
+             └──────────────────────────────┘
+```
+
+**Key insights:** (1) **Execution Tree = the program** — The pipeline config is a declarative program; the Execution Engine is the interpreter. (2) **Plugins = capabilities** — The tree decides *what* runs; plugins do the *work*. (3) **Features = cross-cutting system behavior** — They wrap node execution (feature.pre → node execution → feature.post) for logging, quota, metrics, ledger, and events without polluting pipeline logic. This diagram answers how Temporal fits, where plugins run, what features do, and how variables flow.
+
+---
+
 ## 1. High-level architecture
 
 ```
@@ -110,6 +215,8 @@ For security and audit, the stack is split into clear trust boundaries:
 ---
 
 ## 3. Features in detail
+
+**Design specification:** For a concise feature design (goals, phase model, contracts, attachment, privilege, lifecycle), see [feature-design.md](feature-design.md). The sections below describe the current implementation and built-in features.
 
 ### Feature list (summary)
 
@@ -546,7 +653,7 @@ New nodes created by **DynamicNodeFactoryImpl** receive the same pipeline and qu
   See [README.md](../README.md) and `OloConfig`: **OLO_QUEUE**, **OLO_TENANT_IDS**, **OLO_DEFAULT_TENANT_ID**, **OLO_IS_DEBUG_ENABLED**, **OLO_CACHE_HOST/PORT**, **OLO_DB_HOST/PORT**, **OLO_SESSION_DATA**, **OLO_CONFIG_KEY_PREFIX**, **OLO_CONFIG_***, **OLO_MAX_LOCAL_MESSAGE_SIZE**. Per-tenant **quota** (soft/hard limits) is in **olo:tenants** config: `"config": { "quota": { "softLimit": 100, "hardLimit": 120 } }`. Session and config keys use **tenant-first** pattern `<tenantId>:olo:...`. **olo:tenants** supplies tenant list and **TenantConfigRegistry** at bootstrap. Temporal target/namespace from pipeline config `executionDefaults.temporal`. See [multi-tenant.md](multi-tenant.md).
 
 - **Pipeline config files**  
-  Under `config/` (or `OLO_CONFIG_DIR`): one file per queue (e.g. `olo-chat-queue-oolama.json`) plus `default.json`. For a `-debug` queue, the loader uses the base queue file (e.g. `olo-chat-queue-oolama.json`) if no `<queue>-debug.json` exists. See [pipeline-configuration-how-to.md](pipeline-configuration-how-to.md).
+  Under `config/` (or `OLO_CONFIG_DIR`): one file per queue (e.g. `olo-chat-queue-ollama.json`) plus `default.json`. For a `-debug` queue, the loader uses the base queue file (e.g. `olo-chat-queue-ollama.json`) if no `<queue>-debug.json` exists. See [pipeline-configuration-how-to.md](pipeline-configuration-how-to.md).
 
 - **Scope and debug**  
   Pipeline `scope.features` can list `{"id":"debug","displayName":"Debug"}`. When the queue name ends with `-debug`, `FeatureAttachmentResolver` adds `"debug"` to the enabled feature list so the debug feature runs without requiring it in every config.
