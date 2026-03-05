@@ -51,15 +51,10 @@ public final class OloWorkerApplication {
         }
         OloSessionCache sessionCache = (OloSessionCache) ctx.getSessionCache();
 
-        // Allow env override for local dev (e.g. OLO_TEMPORAL_TARGET=localhost:7233 when config has temporal:7233)
+        // Temporal target: OLO_TEMPORAL_TARGET env wins; else from pipeline config (executionDefaults.temporal.target, e.g. temporal:7233 in Docker).
         String temporalTarget = System.getenv("OLO_TEMPORAL_TARGET");
         if (temporalTarget == null || temporalTarget.isBlank()) {
             temporalTarget = ctx.getTemporalTargetOrDefault("localhost:7233");
-            // When config points at Docker hostname "temporal", use localhost for local runs (e.g. gradlew :olo-worker:run)
-            if ("temporal".equals(temporalTarget) || "temporal:7233".equalsIgnoreCase(temporalTarget)) {
-                temporalTarget = "localhost:7233";
-                log.info("Temporal target was 'temporal' or 'temporal:7233'; using localhost:7233 for local development.");
-            }
         } else {
             temporalTarget = temporalTarget.trim();
         }
